@@ -75,11 +75,26 @@ class ClaudeCodeGenerator:
 
         system_prompt = build_system_prompt()
 
-        user_message = f"""Convert the following Alteryx container to PySpark code.
+        # Count tools and connections for the checklist
+        num_tools = len(context.get("tools", []))
+        num_ext_inputs = len(context.get("external_inputs", []))
+        num_int_conns = len(context.get("internal_connections", []))
+
+        user_message = f"""Convert the following Alteryx container to a complete PySpark Databricks notebook.
 
 {container_description}
 
-Generate the complete PySpark code file. Output ONLY the Python code, no markdown fences, no explanations before or after the code."""
+## CHECKLIST - Your generated code MUST include:
+1. spark.table() calls for ALL {num_ext_inputs} external source inputs
+2. Transformation code for ALL {num_tools} tools listed above
+3. Proper data flow following ALL {num_int_conns} internal connections
+4. For each Join: use the exact join keys specified, handle post-join column drops/renames
+5. For each Filter: generate the True/False outputs that are used downstream
+6. For each Formula: convert ALL formula fields to .withColumn() calls
+7. For each Select: drop deselected columns, apply renames
+8. Final output as createOrReplaceTempView() or write statement
+
+Output ONLY the Python code. No markdown fences, no explanations before or after."""
 
         # Call Claude with retries
         code = None
@@ -195,19 +210,28 @@ Generate the complete PySpark code file. Output ONLY the Python code, no markdow
         return text
 
     def _validate_code(self, code: str) -> bool:
-        """Basic validation that the generated code is reasonable PySpark."""
+        """Validate that the generated code is reasonable PySpark."""
         if not code or len(code) < 50:
             logger.warning("Generated code is too short")
             return False
 
-        # Must have PySpark imports
-        if "pyspark" not in code and "spark" not in code.lower():
+        # Must reference spark
+        if "spark" not in code.lower():
             logger.warning("Generated code doesn't appear to contain PySpark")
             return False
 
+        # Strip Databricks magic commands before syntax check
+        lines = []
+        for line in code.split("\n"):
+            stripped = line.strip()
+            if stripped.startswith("# MAGIC") or stripped.startswith("# COMMAND"):
+                continue
+            lines.append(line)
+        check_code = "\n".join(lines)
+
         # Try to compile (syntax check)
         try:
-            compile(code, "<generated>", "exec")
+            compile(check_code, "<generated>", "exec")
         except SyntaxError as e:
             logger.warning(f"Generated code has syntax error: {e}")
             return False

@@ -37,6 +37,7 @@ class Tool:
     configuration_xml: str  # Raw XML of <Configuration> block
     annotation: str         # Human-readable annotation text
     container_id: Optional[int] = None  # Parent container ToolID, if any
+    parsed_config: dict = field(default_factory=dict)  # Structured config extracted from XML
 
     @property
     def short_type(self) -> str:
@@ -141,7 +142,7 @@ class Workflow:
             if tid in self.text_inputs
         }
 
-        # Source tool info for external inputs
+        # Source tool info for external inputs (full details for AI context)
         source_tools = {}
         for conn in external_inputs:
             if conn.origin_tool_id in self.all_tools:
@@ -152,7 +153,11 @@ class Workflow:
                     "annotation": src.annotation,
                     "container": self._find_tool_container_name(src.tool_id),
                     "connection_type": conn.origin_connection,
+                    "parsed_config": src.parsed_config,
+                    "configuration_xml": src.configuration_xml,
                 }
+                if src.tool_id in self.text_inputs:
+                    source_tools[conn.origin_tool_id]["text_input_data"] = self.text_inputs[src.tool_id]
 
         return {
             "container": container,

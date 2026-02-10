@@ -96,6 +96,153 @@ def _get_attr(element, path: str, attr: str, default: str = "") -> str:
 
 # COMMAND ----------
 
+def _extract_select_fields(config) -> list:
+    """Extract Select/column configuration from a tool's XML."""
+    select_fields = []
+    for path in ["SelectConfiguration/Configuration/OrderChanged",
+                  "SelectConfiguration", "Configuration"]:
+        container = config.find(path)
+        if container is None:
+            continue
+        for sf in container.findall("SelectField"):
+            entry = {
+                "field": sf.get("field", ""),
+                "selected": sf.get("selected", "True"),
+                "rename": sf.get("rename", ""),
+                "type": sf.get("type", ""),
+            }
+            select_fields.append(entry)
+        if select_fields:
+            return select_fields
+    for sf in config.findall(".//SelectField"):
+        entry = {
+            "field": sf.get("field", ""),
+            "selected": sf.get("selected", "True"),
+            "rename": sf.get("rename", ""),
+            "type": sf.get("type", ""),
+        }
+        select_fields.append(entry)
+    return select_fields
+
+
+def _extract_structured_config(config, tool_type: str) -> dict:
+    """Extract structured config from a tool's XML <Configuration> element."""
+    if config is None:
+        return {}
+    parsed = {}
+
+    if tool_type in ("Filter", "LockInFilter"):
+        parsed["expression"] = _get_text(config, "Expression")
+        parsed["mode"] = _get_text(config, "Mode", "Custom")
+    elif tool_type in ("Formula", "LockInFormula"):
+        formulas = []
+        for fe in config.findall(".//FormulaField"):
+            formulas.append({
+                "field": fe.get("field", ""),
+                "expression": fe.get("expression", ""),
+                "type": fe.get("type", ""),
+                "size": fe.get("size", ""),
+            })
+        parsed["formulas"] = formulas
+    elif tool_type in ("Join", "LockInJoin"):
+        left_keys, right_keys = [], []
+        for ji in config.findall("JoinInfo"):
+            side = ji.get("connection", "")
+            for f in ji.findall("Field"):
+                if side == "Left":
+                    left_keys.append(f.get("field", ""))
+                elif side == "Right":
+                    right_keys.append(f.get("field", ""))
+        parsed["left_keys"] = left_keys
+        parsed["right_keys"] = right_keys
+        parsed["join_by_position"] = _get_text(config, "JoinByPosition", "False")
+        select_config = _extract_select_fields(config)
+        if select_config:
+            parsed["select_config"] = select_config
+    elif tool_type in ("Select", "LockInSelect"):
+        parsed["select_fields"] = _extract_select_fields(config)
+    elif tool_type == "Summarize":
+        fields = []
+        for sf in config.findall(".//SummarizeField"):
+            fields.append({
+                "field": sf.get("field", ""),
+                "action": sf.get("action", ""),
+                "rename": sf.get("rename", ""),
+            })
+        parsed["summarize_fields"] = fields
+    elif tool_type == "CrossTab":
+        parsed["group_fields"] = _get_text(config, "GroupFields")
+        parsed["header_field"] = _get_text(config, "HeaderField")
+        parsed["data_field"] = _get_text(config, "DataField")
+        parsed["method"] = _get_text(config, "Method")
+    elif tool_type == "Sort":
+        fields = []
+        for sf in config.findall(".//SortInfo/Field"):
+            fields.append({
+                "field": sf.get("field", ""),
+                "order": sf.get("order", "Ascending"),
+            })
+        parsed["sort_fields"] = fields
+    elif tool_type == "Unique":
+        fields = []
+        for uf in config.findall(".//UniqueFields/Field"):
+            fields.append(uf.get("field", ""))
+        for uf in config.findall(".//UniqueField"):
+            f = uf.get("field", "")
+            if f and f not in fields:
+                fields.append(f)
+        parsed["unique_fields"] = fields
+    elif tool_type == "Union":
+        parsed["mode"] = _get_text(config, "Mode", "Auto")
+        parsed["by_name"] = _get_text(config, "SetByName", "True")
+    elif tool_type == "Sample":
+        parsed["n_records"] = _get_text(config, "NRecords")
+        parsed["group_fields"] = _get_text(config, "GroupFields")
+        parsed["mode"] = _get_text(config, "Mode")
+    elif tool_type in ("InputData", "LockInStreamIn"):
+        table = (_get_text(config, "TableName")
+                 or _get_text(config, "File")
+                 or _get_text(config, "Connection"))
+        parsed["table_name"] = table
+        fields = []
+        for f in config.findall(".//Field"):
+            name = f.get("name", "") or f.get("field", "")
+            ftype = f.get("type", "")
+            if name:
+                fields.append({"name": name, "type": ftype})
+        if fields:
+            parsed["fields"] = fields
+    elif tool_type in ("OutputData", "LockInStreamOut"):
+        parsed["table_name"] = (_get_text(config, "TableName")
+                                or _get_text(config, "File"))
+    elif tool_type == "MultiRowFormula":
+        formulas = []
+        for fe in config.findall(".//FormulaField"):
+            formulas.append({
+                "field": fe.get("field", ""),
+                "expression": fe.get("expression", ""),
+                "type": fe.get("type", ""),
+            })
+        parsed["formulas"] = formulas
+        parsed["num_rows"] = _get_text(config, "NumRows")
+        parsed["direction"] = _get_text(config, "UpdateDirection")
+    elif tool_type == "RegEx":
+        parsed["expression"] = _get_text(config, "Expression")
+        parsed["field"] = _get_text(config, "Field")
+        parsed["output_method"] = _get_text(config, "OutputMethod")
+    elif tool_type == "Transpose":
+        parsed["key_fields"] = [kf.get("field", "") for kf in config.findall(".//KeyFields/Field")]
+        parsed["data_fields"] = [df.get("field", "") for df in config.findall(".//DataFields/Field")]
+    elif tool_type == "RecordID":
+        parsed["field_name"] = _get_text(config, "FieldName")
+        parsed["start_value"] = _get_text(config, "StartValue")
+    elif tool_type == "AppendFields":
+        parsed["mode"] = _get_text(config, "CartesianMode")
+
+    return parsed
+
+# COMMAND ----------
+
 class AlteryxWorkflowParser:
     """Parses an Alteryx .yxmd file into a Workflow model."""
 
@@ -261,6 +408,9 @@ class AlteryxWorkflowParser:
         if config is not None:
             config_xml = ET.tostring(config, encoding="unicode", method="xml")
 
+        # Extract structured configuration
+        parsed_config = _extract_structured_config(config, tool_type)
+
         # Annotation
         annotation = ""
         if props is not None:
@@ -280,6 +430,7 @@ class AlteryxWorkflowParser:
             configuration_xml=config_xml,
             annotation=annotation,
             container_id=container_id,
+            parsed_config=parsed_config,
         )
 
     def _parse_text_input_data(self, node) -> list:
