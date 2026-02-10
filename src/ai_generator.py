@@ -85,16 +85,20 @@ class ClaudeCodeGenerator:
 {container_description}
 
 ## CHECKLIST - Your generated code MUST include:
-1. spark.table() calls for ALL {num_ext_inputs} external source inputs
-2. Transformation code for ALL {num_tools} tools listed above
-3. Proper data flow following ALL {num_int_conns} internal connections
-4. For each Join: use the exact join keys specified, handle post-join column drops/renames
-5. For each Filter: generate the True/False outputs that are used downstream
-6. For each Formula: convert ALL formula fields to .withColumn() calls
-7. For each Select: drop deselected columns, apply renames
-8. Final output as createOrReplaceTempView() or write statement
+1. First line MUST be: # Databricks notebook source
+2. Use # COMMAND ---------- between every cell
+3. Use # MAGIC %md header cells before each code section
+4. spark.table() calls for ALL {num_ext_inputs} external source inputs
+5. Transformation code for ALL {num_tools} tools listed above
+6. Proper data flow following ALL {num_int_conns} internal connections
+7. For each Join: use the exact join keys specified, handle post-join column drops/renames
+8. For each Filter: generate the True/False outputs that are used downstream
+9. For each Formula: convert ALL formula fields to .withColumn() calls
+10. For each Select: drop deselected columns, apply renames
+11. Final output as createOrReplaceTempView() or write statement
 
-Output ONLY the Python code. No markdown fences, no explanations before or after."""
+CRITICAL: Output must be in Databricks notebook format (NOT plain Python).
+Output ONLY the code. No markdown fences, no explanations before or after."""
 
         # Call Claude with retries
         code = None
@@ -112,6 +116,7 @@ Output ONLY the Python code. No markdown fences, no explanations before or after
                 code = self._extract_code(raw_response)
 
                 if code and self._validate_code(code):
+                    code = self._ensure_databricks_format(code, container.name)
                     logger.info(f"Successfully generated code for '{container.name}'")
                     return code
                 else:
@@ -220,11 +225,13 @@ Output ONLY the Python code. No markdown fences, no explanations before or after
             logger.warning("Generated code doesn't appear to contain PySpark")
             return False
 
-        # Strip Databricks magic commands before syntax check
+        # Strip Databricks magic/command lines and notebook header before syntax check
         lines = []
         for line in code.split("\n"):
             stripped = line.strip()
             if stripped.startswith("# MAGIC") or stripped.startswith("# COMMAND"):
+                continue
+            if stripped == "# Databricks notebook source":
                 continue
             lines.append(line)
         check_code = "\n".join(lines)
@@ -237,3 +244,131 @@ Output ONLY the Python code. No markdown fences, no explanations before or after
             return False
 
         return True
+
+    def _ensure_databricks_format(self, code: str, container_name: str) -> str:
+        """
+        Post-process generated code to ensure it is valid Databricks notebook format.
+
+        Ensures:
+        - First line is '# Databricks notebook source'
+        - Cells separated by '# COMMAND ----------'
+        - Markdown header cells use '# MAGIC %md'
+        - Proper blank lines around COMMAND separators
+        """
+        lines = code.strip().split("\n")
+
+        # Check if already in Databricks format
+        has_notebook_header = lines[0].strip() == "# Databricks notebook source"
+        has_command_seps = any(
+            line.strip().startswith("# COMMAND") for line in lines
+        )
+
+        if has_notebook_header and has_command_seps:
+            # Already in Databricks format - just normalize separators
+            return self._normalize_command_separators(code)
+
+        # Need to convert plain Python into Databricks notebook format
+        return self._convert_to_databricks_notebook(code, container_name)
+
+    def _normalize_command_separators(self, code: str) -> str:
+        """Normalize COMMAND separators to have exactly one blank line before and after."""
+        lines = code.split("\n")
+        result = []
+        i = 0
+        while i < len(lines):
+            stripped = lines[i].strip()
+            if stripped.startswith("# COMMAND"):
+                # Remove trailing blank lines before separator
+                while result and result[-1].strip() == "":
+                    result.pop()
+                result.append("")
+                result.append("# COMMAND ----------")
+                result.append("")
+                # Skip any blank lines after separator
+                i += 1
+                while i < len(lines) and lines[i].strip() == "":
+                    i += 1
+                continue
+            result.append(lines[i])
+            i += 1
+        return "\n".join(result)
+
+    def _convert_to_databricks_notebook(self, code: str, container_name: str) -> str:
+        """Convert plain Python code to Databricks notebook format with proper cells."""
+        lines = code.strip().split("\n")
+
+        cells = []
+
+        # Cell 1: Title markdown
+        cells.append(
+            "# MAGIC %md\n"
+            f"# MAGIC # Container: {container_name}\n"
+            "# MAGIC Converted from Alteryx workflow to PySpark for Databricks."
+        )
+
+        # Split code into logical sections at comment headers
+        current_section_lines = []
+        current_header = None
+
+        for line in lines:
+            stripped = line.strip()
+
+            # Skip existing notebook markers
+            if stripped == "# Databricks notebook source":
+                continue
+
+            # Detect section headers (lines like "# ===" or "# ---" or "# STEP")
+            is_header = (
+                (stripped.startswith("# =") and len(stripped) > 10)
+                or (stripped.startswith("# ---") and len(stripped) > 10)
+                or re.match(r"^# (STEP|Step|SOURCE|Source|FINAL|Final|IMPORT|Import)", stripped)
+                or re.match(r"^# (MAGIC|COMMAND)", stripped)
+            )
+
+            if is_header and not stripped.startswith("# MAGIC") and not stripped.startswith("# COMMAND"):
+                # Start a new section - flush the current one
+                if current_section_lines:
+                    cell_content = "\n".join(current_section_lines).strip()
+                    if cell_content:
+                        if current_header:
+                            # Add markdown header cell
+                            clean_header = current_header.strip("# =-").strip()
+                            if clean_header:
+                                cells.append(
+                                    f"# MAGIC %md\n"
+                                    f"# MAGIC ## {clean_header}"
+                                )
+                        cells.append(cell_content)
+                    current_section_lines = []
+
+                current_header = stripped
+                continue
+
+            current_section_lines.append(line)
+
+        # Flush remaining
+        if current_section_lines:
+            cell_content = "\n".join(current_section_lines).strip()
+            if cell_content:
+                if current_header:
+                    clean_header = current_header.strip("# =-").strip()
+                    if clean_header:
+                        cells.append(
+                            f"# MAGIC %md\n"
+                            f"# MAGIC ## {clean_header}"
+                        )
+                cells.append(cell_content)
+
+        # If no sections were detected, just put entire code in one cell
+        if len(cells) <= 1:
+            cells.append(code.strip())
+
+        # Assemble into Databricks notebook format
+        parts = ["# Databricks notebook source"]
+        for cell in cells:
+            parts.append("")
+            parts.append("# COMMAND ----------")
+            parts.append("")
+            parts.append(cell)
+
+        return "\n".join(parts) + "\n"

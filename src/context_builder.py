@@ -440,15 +440,32 @@ Given a detailed description of an Alteryx container (a group of connected tools
 ### 12. TextInput Tool
 - `spark.createDataFrame(data, schema)` using the inline data provided
 
-## OUTPUT FORMAT
-Generate a SINGLE, COMPLETE Databricks notebook-style Python file:
+## OUTPUT FORMAT - DATABRICKS NOTEBOOK (MANDATORY)
 
-```python
+You MUST generate output in **Databricks notebook source format**. This is NOT a regular Python file.
+The exact format rules are:
+
+1. The VERY FIRST LINE must be exactly: `# Databricks notebook source`
+2. Cells are separated by a blank line, then `# COMMAND ----------`, then a blank line
+3. Markdown/documentation cells use `# MAGIC %md` on the first line, then `# MAGIC` for each subsequent line
+4. Code cells contain regular Python code
+5. Every logical section (imports, source tables, each transformation step, final output) MUST be in its own cell
+
+Here is the EXACT format to follow:
+
+```
 # Databricks notebook source
 
 # COMMAND ----------
 
-# Module docstring explaining container purpose
+# MAGIC %md
+# MAGIC # Container: <container_name>
+# MAGIC Converted from Alteryx workflow. This notebook contains the PySpark equivalent of the Alteryx container logic.
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Imports
 
 # COMMAND ----------
 
@@ -457,45 +474,71 @@ from pyspark.sql.types import *
 
 # COMMAND ----------
 
-# ============================================================
-# SOURCE TABLES
-# ============================================================
-df_source_1 = spark.table("catalog.schema.table1")  # Tool ID XX
-df_source_2 = spark.table("catalog.schema.table2")  # Tool ID YY
+# MAGIC %md
+# MAGIC ## Source Tables
+# MAGIC Load all input data sources referenced by this container.
 
 # COMMAND ----------
 
-# ============================================================
-# STEP 1: Filter (Tool ID XX) - description
-# ============================================================
-df_filter_XX_true = df_source_1.filter(...)
+# Source Table: <annotation or table name> (Tool ID XX)
+df_source_1 = spark.table("catalog.schema.table1")
+
+# Source Table: <annotation or table name> (Tool ID YY)
+df_source_2 = spark.table("catalog.schema.table2")
 
 # COMMAND ----------
 
-# ============================================================
-# STEP 2: Join (Tool ID YY) - description
-# ============================================================
-df_join_YY = df_filter_XX_true.join(df_source_2, ...)
+# MAGIC %md
+# MAGIC ## Step 1: Filter (Tool ID XX)
+# MAGIC <brief description of what this filter does>
 
 # COMMAND ----------
 
-# ... more steps following the data flow ...
+# Filter Tool XX - <description>
+df_filter_XX_true = df_source_1.filter(F.col("status") == "Active")
+df_filter_XX_false = df_source_1.filter(~(F.col("status") == "Active"))
 
 # COMMAND ----------
 
-# ============================================================
-# FINAL OUTPUT
-# ============================================================
+# MAGIC %md
+# MAGIC ## Step 2: Join (Tool ID YY)
+# MAGIC <brief description of what this join does>
+
+# COMMAND ----------
+
+# Join Tool YY - <description>
+df_join_YY = df_filter_XX_true.join(
+    df_source_2,
+    df_filter_XX_true["key_col"] == df_source_2["key_col"],
+    "inner"
+)
+# Drop duplicate join key columns
+df_join_YY = df_join_YY.drop(df_source_2["key_col"])
+
+# COMMAND ----------
+
+# ... more steps, each with a MAGIC %md header cell and a code cell ...
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Final Output
+
+# COMMAND ----------
+
+# Write final result
 df_result.createOrReplaceTempView("output_view_name")
-# OR: df_result.write.mode("overwrite").saveAsTable("catalog.schema.table")
 ```
 
-## IMPORTANT
+## CRITICAL FORMAT RULES
+- FIRST LINE must be `# Databricks notebook source` (no exceptions)
+- Use `# COMMAND ----------` between EVERY cell (markdown and code)
+- EVERY step MUST have a `# MAGIC %md` header cell with a `## Step N:` title
+- Use `# MAGIC %md` for documentation, NOT regular Python comments for section headers
 - Use `from pyspark.sql import functions as F` consistently
 - NEVER use pandas
 - Handle null values with `F.coalesce()` or `F.when().isNull()`
 - Reference Tool IDs in comments for traceability
-- Add `# COMMAND ----------` separators between logical sections
 - EVERY tool in the TOOLS section must appear in your generated code
 - EVERY connection in DATA FLOW must be represented
 """
