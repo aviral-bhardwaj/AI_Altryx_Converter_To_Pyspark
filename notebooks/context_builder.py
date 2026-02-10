@@ -335,7 +335,94 @@ def build_container_prompt(
 
 def build_system_prompt() -> str:
     """Build the system prompt for Claude AI code generation."""
-    return """You are an expert data engineer converting Alteryx workflows to production-ready PySpark code for Databricks.
+
+    # IMPORTANT: Build Databricks notebook markers as variables.
+    # If we write literal '# COMMAND ----------' at column 0 inside a triple-quoted
+    # string, Databricks will interpret it as a cell separator when parsing this
+    # notebook file, breaking the function. Same for '# MAGIC' and '# Databricks notebook source'.
+    _CMD = "# COMMAND ----------"
+    _NB = "# Databricks notebook source"
+    _MD = "# MAGIC %md"
+    _M = "# MAGIC"
+
+    format_example = (
+        f"{_NB}\n"
+        f"\n"
+        f"{_CMD}\n"
+        f"\n"
+        f"{_MD}\n"
+        f"{_M} # Container: <container_name>\n"
+        f"{_M} Converted from Alteryx workflow. This notebook contains the PySpark equivalent of the Alteryx container logic.\n"
+        f"\n"
+        f"{_CMD}\n"
+        f"\n"
+        f"{_MD}\n"
+        f"{_M} ## Imports\n"
+        f"\n"
+        f"{_CMD}\n"
+        f"\n"
+        f"from pyspark.sql import functions as F\n"
+        f"from pyspark.sql.types import *\n"
+        f"\n"
+        f"{_CMD}\n"
+        f"\n"
+        f"{_MD}\n"
+        f"{_M} ## Source Tables\n"
+        f"{_M} Load all input data sources referenced by this container.\n"
+        f"\n"
+        f"{_CMD}\n"
+        f"\n"
+        f"# Source Table: <annotation or table name> (Tool ID XX)\n"
+        f"df_source_1 = spark.table(\"catalog.schema.table1\")\n"
+        f"\n"
+        f"# Source Table: <annotation or table name> (Tool ID YY)\n"
+        f"df_source_2 = spark.table(\"catalog.schema.table2\")\n"
+        f"\n"
+        f"{_CMD}\n"
+        f"\n"
+        f"{_MD}\n"
+        f"{_M} ## Step 1: Filter (Tool ID XX)\n"
+        f"{_M} <brief description of what this filter does>\n"
+        f"\n"
+        f"{_CMD}\n"
+        f"\n"
+        f"# Filter Tool XX - <description>\n"
+        f"df_filter_XX_true = df_source_1.filter(F.col(\"status\") == \"Active\")\n"
+        f"df_filter_XX_false = df_source_1.filter(~(F.col(\"status\") == \"Active\"))\n"
+        f"\n"
+        f"{_CMD}\n"
+        f"\n"
+        f"{_MD}\n"
+        f"{_M} ## Step 2: Join (Tool ID YY)\n"
+        f"{_M} <brief description of what this join does>\n"
+        f"\n"
+        f"{_CMD}\n"
+        f"\n"
+        f"# Join Tool YY - <description>\n"
+        f"df_join_YY = df_filter_XX_true.join(\n"
+        f"    df_source_2,\n"
+        f"    df_filter_XX_true[\"key_col\"] == df_source_2[\"key_col\"],\n"
+        f"    \"inner\"\n"
+        f")\n"
+        f"# Drop duplicate join key columns\n"
+        f"df_join_YY = df_join_YY.drop(df_source_2[\"key_col\"])\n"
+        f"\n"
+        f"{_CMD}\n"
+        f"\n"
+        f"# ... more steps, each with a {_MD} header cell and a code cell ...\n"
+        f"\n"
+        f"{_CMD}\n"
+        f"\n"
+        f"{_MD}\n"
+        f"{_M} ## Final Output\n"
+        f"\n"
+        f"{_CMD}\n"
+        f"\n"
+        f"# Write final result\n"
+        f"df_result.createOrReplaceTempView(\"output_view_name\")"
+    )
+
+    return f"""You are an expert data engineer converting Alteryx workflows to production-ready PySpark code for Databricks.
 
 ## Your Task
 Given a detailed description of an Alteryx container (a group of connected tools), generate a COMPLETE, CORRECT PySpark script that replicates the EXACT same data transformation logic. Every single tool must be converted.
@@ -405,96 +492,23 @@ Given a detailed description of an Alteryx container (a group of connected tools
 You MUST generate output in **Databricks notebook source format**. This is NOT a regular Python file.
 The exact format rules are:
 
-1. The VERY FIRST LINE must be exactly: `# Databricks notebook source`
-2. Cells are separated by a blank line, then `# COMMAND ----------`, then a blank line
-3. Markdown/documentation cells use `# MAGIC %md` on the first line, then `# MAGIC` for each subsequent line
+1. The VERY FIRST LINE must be exactly: `{_NB}`
+2. Cells are separated by a blank line, then `{_CMD}`, then a blank line
+3. Markdown/documentation cells use `{_MD}` on the first line, then `{_M}` for each subsequent line
 4. Code cells contain regular Python code
 5. Every logical section (imports, source tables, each transformation step, final output) MUST be in its own cell
 
 Here is the EXACT format to follow:
 
 ```
-# Databricks notebook source
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC # Container: <container_name>
-# MAGIC Converted from Alteryx workflow. This notebook contains the PySpark equivalent of the Alteryx container logic.
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Imports
-
-# COMMAND ----------
-
-from pyspark.sql import functions as F
-from pyspark.sql.types import *
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Source Tables
-# MAGIC Load all input data sources referenced by this container.
-
-# COMMAND ----------
-
-# Source Table: <annotation or table name> (Tool ID XX)
-df_source_1 = spark.table("catalog.schema.table1")
-
-# Source Table: <annotation or table name> (Tool ID YY)
-df_source_2 = spark.table("catalog.schema.table2")
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Step 1: Filter (Tool ID XX)
-# MAGIC <brief description of what this filter does>
-
-# COMMAND ----------
-
-# Filter Tool XX - <description>
-df_filter_XX_true = df_source_1.filter(F.col("status") == "Active")
-df_filter_XX_false = df_source_1.filter(~(F.col("status") == "Active"))
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Step 2: Join (Tool ID YY)
-# MAGIC <brief description of what this join does>
-
-# COMMAND ----------
-
-# Join Tool YY - <description>
-df_join_YY = df_filter_XX_true.join(
-    df_source_2,
-    df_filter_XX_true["key_col"] == df_source_2["key_col"],
-    "inner"
-)
-# Drop duplicate join key columns
-df_join_YY = df_join_YY.drop(df_source_2["key_col"])
-
-# COMMAND ----------
-
-# ... more steps, each with a MAGIC %md header cell and a code cell ...
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Final Output
-
-# COMMAND ----------
-
-# Write final result
-df_result.createOrReplaceTempView("output_view_name")
+{format_example}
 ```
 
 ## CRITICAL FORMAT RULES
-- FIRST LINE must be `# Databricks notebook source` (no exceptions)
-- Use `# COMMAND ----------` between EVERY cell (markdown and code)
-- EVERY step MUST have a `# MAGIC %md` header cell with a `## Step N:` title
-- Use `# MAGIC %md` for documentation, NOT regular Python comments for section headers
+- FIRST LINE must be `{_NB}` (no exceptions)
+- Use `{_CMD}` between EVERY cell (markdown and code)
+- EVERY step MUST have a `{_MD}` header cell with a `## Step N:` title
+- Use `{_MD}` for documentation, NOT regular Python comments for section headers
 - Use `from pyspark.sql import functions as F` consistently
 - NEVER use pandas
 - Handle null values with `F.coalesce()` or `F.when().isNull()`
