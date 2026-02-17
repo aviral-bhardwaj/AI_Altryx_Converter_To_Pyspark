@@ -26,56 +26,47 @@
 # COMMAND ----------
 
 # -- Databricks Widgets --
-
 dbutils.widgets.text(
     "workflow_path",
-    "",
+    "/Volumes/prism_gold/us_insurance/data/input/USI Misc Long Format.yxmd",
     "1. Workflow File Path (.yxmd)"
 )
-
 dbutils.widgets.text(
     "output_dir",
-    "/Workspace/Users/shared/alteryx_converter/output",
+    "/Volumes/prism_gold/us_insurance/data/input/output",
     "2. Output Directory"
 )
-
+dbutils.widgets.text(
+    "container_name",
+    "",
+    "3. Container Name (blank = all)"
+)
 dbutils.widgets.dropdown(
     "run_mode",
     "convert",
     ["convert", "list_containers", "dry_run"],
-    "3. Run Mode"
+    "4. Run Mode"
 )
-
-dbutils.widgets.dropdown(
-    "model",
-    "claude-sonnet-4-20250514",
-    ["claude-sonnet-4-20250514", "claude-opus-4-20250514", "claude-haiku-4-5-20251001"],
-    "4. Claude Model"
-)
-
 dbutils.widgets.dropdown(
     "max_retries",
     "2",
     ["0", "1", "2", "3", "4", "5"],
-    "5. Max Retries"
+    "6. Max Retries"
 )
-
 dbutils.widgets.text(
     "secret_scope",
     "alteryx-converter",
-    "6. Secret Scope Name"
+    "7. Secret Scope Name"
 )
-
 dbutils.widgets.text(
     "secret_key",
     "anthropic-api-key",
-    "7. Secret Key Name"
+    "8. Secret Key Name"
 )
-
 dbutils.widgets.text(
     "source_tables_json",
     "",
-    "8. Source Tables JSON Path (optional)"
+    "9. Source Tables JSON Path (optional)"
 )
 
 # COMMAND ----------
@@ -84,8 +75,9 @@ dbutils.widgets.text(
 
 WORKFLOW_PATH = dbutils.widgets.get("workflow_path")
 OUTPUT_DIR = dbutils.widgets.get("output_dir")
+CONTAINER_NAME = dbutils.widgets.get("container_name").strip() or None
 RUN_MODE = dbutils.widgets.get("run_mode")
-MODEL = dbutils.widgets.get("model")
+MODEL = "claude-sonnet-4-20250514"
 MAX_RETRIES = int(dbutils.widgets.get("max_retries"))
 SECRET_SCOPE = dbutils.widgets.get("secret_scope")
 SECRET_KEY = dbutils.widgets.get("secret_key")

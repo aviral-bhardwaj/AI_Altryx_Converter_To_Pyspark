@@ -350,7 +350,7 @@ def build_container_prompt(
     tools = context.get("tools", [])
     tools_sorted = sorted(tools, key=lambda t: (t.position.get("x", 0), t.position.get("y", 0)))
 
-    module_label = "root-level workflow" if is_root else "this container"
+    module_label = "this workflow" if is_unified else "this container"
     parts.append(f"## TOOLS (detailed configuration of each tool in {module_label}):")
     parts.append("")
 
