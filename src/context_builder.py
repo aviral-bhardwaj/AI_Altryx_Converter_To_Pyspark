@@ -211,6 +211,27 @@ def _infer_logical_name(tool: Tool, upstream_annotation: str = "") -> str:
     return ""
 
 
+def _identify_source_tools(context: dict) -> list:
+    """
+    Identify source tools within a module: tools that have no incoming
+    internal connections (InputData, TextInput, etc.).
+    """
+    tools = context.get("tools", [])
+    internal_connections = context.get("internal_connections", [])
+
+    # Build set of tools that receive internal input
+    tools_with_input = {c.dest_tool_id for c in internal_connections}
+
+    # Source tools: tools with no internal incoming connections
+    source_types = {"InputData", "TextInput", "LockInStreamIn", "DynamicInput"}
+    sources = []
+    for tool in tools:
+        if tool.tool_id not in tools_with_input and tool.tool_type in source_types:
+            sources.append(tool)
+
+    return sources
+
+
 def build_container_prompt(
     container: Container,
     context: dict,
@@ -218,10 +239,14 @@ def build_container_prompt(
     source_tables_config: Optional[dict] = None,
 ) -> str:
     """
-    Build a detailed prompt describing a container's full logic for Claude AI.
+    Build a detailed prompt describing a container/module's full logic for Claude AI.
+
+    Handles both:
+    - Real containers (ToolContainer elements in Alteryx)
+    - Root-level tools (virtual container with tool_id=-1)
 
     Returns a structured text description including:
-    - Container name and purpose
+    - Module name and purpose
     - All source tables with full details
     - All tools with structured configurations
     - Data flow (connections) in execution order
@@ -230,10 +255,16 @@ def build_container_prompt(
     - Inline data (TextInput tools)
     """
     parts = []
+    is_root = (container.tool_id == -1)
 
     # ── Header ───────────────────────────────────────────────────────
-    parts.append(f"# Container: {container.name}")
-    parts.append(f"# Container ToolID: {container.tool_id}")
+    if is_root:
+        parts.append(f"# Module: {container.name} (Root-Level Workflow)")
+        parts.append(f"# This module contains all {len(context.get('tools', []))} tools at the "
+                      "root level of the workflow (outside any container).")
+    else:
+        parts.append(f"# Container: {container.name}")
+        parts.append(f"# Container ToolID: {container.tool_id}")
     parts.append("")
 
     # ── Source tables config (user-provided mapping) ──────────────────
@@ -243,12 +274,46 @@ def build_container_prompt(
             parts.append(f"  '{key}' -> spark.table(\"{value}\")")
         parts.append("")
 
+    # ── Internal source tools (InputData/TextInput within this module) ─
+    internal_sources = _identify_source_tools(context)
+    if internal_sources:
+        parts.append("## SOURCE DATA (data source tools within this module):")
+        parts.append("These tools read data from external sources. Each MUST become a")
+        parts.append("spark.table() call (or spark.createDataFrame() for TextInput) at the top of your code.")
+        parts.append("Use a MEANINGFUL variable name derived from the table name or annotation.")
+        parts.append("")
+        for tool in internal_sources:
+            pc = tool.parsed_config or {}
+            parts.append(f"  ### Source Tool {tool.tool_id} ({tool.tool_type})")
+            if tool.annotation:
+                parts.append(f"      Annotation: {tool.annotation}")
+            table_name = pc.get("table_name", "")
+            if table_name:
+                parts.append(f"      Table/File: {table_name}")
+            fields = pc.get("fields", [])
+            if fields:
+                parts.append(f"      Columns ({len(fields)}):")
+                for f in fields:
+                    parts.append(f"        - {f.get('name', '')} ({f.get('type', '')})")
+
+            # Check source_tables_config for a mapping
+            if source_tables_config:
+                for key, value in source_tables_config.items():
+                    if (str(tool.tool_id) == str(key)
+                            or (tool.annotation and key.lower() in tool.annotation.lower())
+                            or (table_name and key.lower() in table_name.lower())):
+                        parts.append(f"      -> USE: spark.table(\"{value}\")")
+                        break
+
+            parts.append("")
+        parts.append("")
+
     # ── External inputs with FULL details ─────────────────────────────
     external_inputs = context.get("external_inputs", [])
     source_tools = context.get("source_tools", {})
     if external_inputs:
-        parts.append("## SOURCE DATA (external inputs flowing INTO this container):")
-        parts.append("These are DataFrames that this container receives from outside.")
+        parts.append("## EXTERNAL INPUTS (data flowing INTO this module from outside):")
+        parts.append("These are DataFrames that this module receives from other containers.")
         parts.append("You MUST define these as spark.table() reads at the top of your code.")
         parts.append("Use a MEANINGFUL variable name derived from the table/annotation, NOT generic names.")
         parts.append("")
@@ -366,7 +431,8 @@ def build_container_prompt(
     tools = context.get("tools", [])
     tools_sorted = sorted(tools, key=lambda t: (t.position.get("x", 0), t.position.get("y", 0)))
 
-    parts.append("## TOOLS (detailed configuration of each tool in this container):")
+    module_label = "root-level workflow" if is_root else "this container"
+    parts.append(f"## TOOLS (detailed configuration of each tool in {module_label}):")
     parts.append("")
 
     for tool in tools_sorted:
@@ -425,10 +491,14 @@ def build_system_prompt() -> str:
 
 ## YOUR TASK
 
-Given a detailed description of an Alteryx container (a named group of connected tools that represent a data pipeline), you must generate a COMPLETE, CORRECT, and EFFICIENT PySpark Databricks notebook that replicates the EXACT same data transformation logic.
+Given a detailed description of an Alteryx module (either a named container or the root-level workflow with all tools outside containers), you must generate a COMPLETE, CORRECT, and EFFICIENT PySpark Databricks notebook that replicates the EXACT same data transformation logic.
+
+A module can be:
+- A **Container**: a named group of tools inside an Alteryx ToolContainer element
+- **Root-level workflow**: all tools that sit at the root level of the workflow, outside any container
 
 **Think step by step:**
-1. First, READ the SOURCE DATA section to understand what input tables exist
+1. First, READ the SOURCE DATA section to understand what input tables/sources exist
 2. Then, READ the DATA FLOW section to understand the execution order (which tool feeds into which)
 3. Then, READ each TOOL's configuration to understand the exact transformation
 4. Finally, GENERATE the code in the correct order, following every connection

@@ -186,24 +186,36 @@ parser_obj = AlteryxWorkflowParser(workflow_path)
 workflow = parser_obj.parse()
 parse_time = time.time() - t0
 
+root_tools = workflow.get_root_tools()
+container_tool_count = sum(len(c.child_tools) for c in workflow.containers)
+
 print(f"  Parsed in {parse_time:.1f}s")
 print(f"  Containers: {len(workflow.containers)}")
+print(f"  Tools in containers: {container_tool_count}")
+print(f"  Root-level tools: {len(root_tools)}")
 print(f"  Total tools: {len(workflow.all_tools)}")
 print(f"  Total connections: {len(workflow.connections)}")
+
+if root_tools:
+    print(f"  * Root-level tools will be processed as 'Main_Workflow' module")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Step 5: List Containers
+# MAGIC ## Step 5: List Modules
 
 # COMMAND ----------
 
-print("\nContainers found in workflow:")
+print("\nModules found in workflow:")
 print("-" * 60)
-for i, container in enumerate(workflow.containers, 1):
+idx = 1
+for container in workflow.containers:
     tool_count = len(container.child_tools)
     disabled_tag = " [DISABLED]" if container.disabled else ""
-    print(f"  {i:2d}. {container.name:<40s} ({tool_count} tools){disabled_tag}")
+    print(f"  {idx:2d}. {container.name:<40s} ({tool_count} tools){disabled_tag}")
+    idx += 1
+if root_tools:
+    print(f"  {idx:2d}. {'Main_Workflow':<40s} ({len(root_tools)} tools) [ROOT-LEVEL]")
 print("-" * 60)
 
 # COMMAND ----------
@@ -215,36 +227,61 @@ if RUN_MODE == "list_containers":
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Step 6: Filter Containers
+# MAGIC ## Step 6: Build Conversion List (Containers + Root-Level Tools)
 
 # COMMAND ----------
 
-containers_to_convert = workflow.containers
+# Build the list of (container, context) items to convert
+items_to_convert = []
 
+# 1) Named containers
+for container in workflow.containers:
+    ctx = workflow.get_container_context(container.tool_id)
+    items_to_convert.append({
+        "container": container,
+        "context": ctx,
+        "is_root": False,
+    })
+
+# 2) Root-level tools (outside any container)
+root_ctx = workflow.get_root_context()
+if root_ctx:
+    items_to_convert.append({
+        "container": root_ctx["container"],
+        "context": root_ctx,
+        "is_root": True,
+    })
+
+# Filter if requested
 if CONTAINER_NAME:
-    containers_to_convert = [
-        c for c in workflow.containers
-        if c.name.lower() == CONTAINER_NAME.lower()
+    items_to_convert = [
+        item for item in items_to_convert
+        if item["container"].name.lower() == CONTAINER_NAME.lower()
     ]
-    if not containers_to_convert:
-        print(f"ERROR: Container '{CONTAINER_NAME}' not found.")
-        print("Available containers:")
+    if not items_to_convert:
+        print(f"ERROR: Module '{CONTAINER_NAME}' not found.")
+        print("Available modules:")
         for c in workflow.containers:
             print(f"  - {c.name}")
-        dbutils.notebook.exit("CONTAINER_NOT_FOUND")
-    print(f"Filtered to container: '{CONTAINER_NAME}'")
+        if root_tools:
+            print(f"  - Main_Workflow (root-level)")
+        dbutils.notebook.exit("MODULE_NOT_FOUND")
+    print(f"Filtered to module: '{CONTAINER_NAME}'")
 else:
-    print(f"Converting all {len(containers_to_convert)} containers")
+    print(f"Converting all {len(items_to_convert)} modules")
 
 # COMMAND ----------
 
 # -- Dry-run mode --
 if RUN_MODE == "dry_run":
-    print("\nDry-run mode -- extracted context for each container:\n")
-    for container in containers_to_convert:
-        context = workflow.get_container_context(container.tool_id)
-        print(f"-- {container.name} --")
-        print(f"   Tools: {len(container.child_tools)}")
+    print("\nDry-run mode -- extracted context for each module:\n")
+    for item in items_to_convert:
+        container = item["container"]
+        context = item["context"]
+        tag = " [ROOT-LEVEL]" if item["is_root"] else ""
+        print(f"-- {container.name}{tag} --")
+        print(f"   Tools: {len(context['tools'])}")
+        print(f"   Internal connections: {len(context['internal_connections'])}")
         print(f"   External inputs: {len(context['external_inputs'])}")
         print(f"   External outputs: {len(context['external_outputs'])}")
         print(f"   Sub-containers: {len(context['sub_containers'])}")
@@ -298,18 +335,22 @@ print(f"Claude AI generator initialized (model={MODEL}, retries={MAX_RETRIES})")
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Generate Code for Each Container
+# MAGIC ### Generate Code for Each Module
 
 # COMMAND ----------
 
 results = []
+total = len(items_to_convert)
 
-for i, container in enumerate(containers_to_convert, 1):
+for i, item in enumerate(items_to_convert, 1):
+    container = item["container"]
+    context = item["context"]
+    tag = " [ROOT-LEVEL]" if item["is_root"] else ""
+
     print(f"\n{'='*60}")
-    print(f"[{i}/{len(containers_to_convert)}] Generating: {container.name}")
+    print(f"[{i}/{total}] Generating: {container.name}{tag}")
     print(f"{'='*60}")
 
-    context = workflow.get_container_context(container.tool_id)
     t0 = time.time()
 
     try:
@@ -334,7 +375,7 @@ for i, container in enumerate(containers_to_convert, 1):
             "file": output_file,
             "status": "Success",
             "time": f"{gen_time:.1f}s",
-            "tools": len(container.child_tools),
+            "tools": len(context["tools"]),
         })
         print(f"   Written to: {output_file} ({gen_time:.1f}s)")
 
@@ -345,7 +386,7 @@ for i, container in enumerate(containers_to_convert, 1):
             "file": "-",
             "status": f"Failed: {str(e)[:80]}",
             "time": f"{gen_time:.1f}s",
-            "tools": len(container.child_tools),
+            "tools": len(context["tools"]),
         })
         print(f"   Failed: {e}")
 
@@ -389,4 +430,4 @@ except Exception as e:
 # -- Return summary as notebook exit value --
 success_count = sum(1 for r in results if "Success" in r["status"])
 total_count = len(results)
-dbutils.notebook.exit(f"COMPLETE: {success_count}/{total_count} containers converted successfully")
+dbutils.notebook.exit(f"COMPLETE: {success_count}/{total_count} modules converted successfully")

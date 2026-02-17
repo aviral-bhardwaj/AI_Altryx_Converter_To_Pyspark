@@ -180,6 +180,81 @@ class Workflow:
         for sub_id in container.sub_container_ids:
             self._collect_container_tool_ids(sub_id, result)
 
+    def get_root_tools(self) -> list:
+        """Get tools that are not inside any container."""
+        return [t for t in self.all_tools.values() if t.container_id is None]
+
+    def get_root_tool_ids(self) -> set:
+        """Get IDs of tools that are not inside any container."""
+        return {tid for tid, t in self.all_tools.items() if t.container_id is None}
+
+    def get_root_context(self) -> dict:
+        """
+        Build context for root-level tools (tools not in any container).
+        Returns the same structure as get_container_context().
+        """
+        root_tool_ids = self.get_root_tool_ids()
+        if not root_tool_ids:
+            return {}
+
+        container_tool_ids = set()
+        for cid in self.all_containers:
+            self._collect_container_tool_ids(cid, container_tool_ids)
+
+        internal_connections = [
+            c for c in self.connections
+            if c.origin_tool_id in root_tool_ids and c.dest_tool_id in root_tool_ids
+        ]
+        external_inputs = [
+            c for c in self.connections
+            if c.dest_tool_id in root_tool_ids and c.origin_tool_id not in root_tool_ids
+        ]
+        external_outputs = [
+            c for c in self.connections
+            if c.origin_tool_id in root_tool_ids and c.dest_tool_id not in root_tool_ids
+        ]
+
+        tools = [self.all_tools[tid] for tid in root_tool_ids if tid in self.all_tools]
+        text_input_data = {
+            tid: self.text_inputs[tid]
+            for tid in root_tool_ids
+            if tid in self.text_inputs
+        }
+
+        source_tools = {}
+        for conn in external_inputs:
+            if conn.origin_tool_id in self.all_tools:
+                src = self.all_tools[conn.origin_tool_id]
+                source_tools[conn.origin_tool_id] = {
+                    "tool_id": src.tool_id,
+                    "type": src.tool_type,
+                    "annotation": src.annotation,
+                    "container": self._find_tool_container_name(src.tool_id),
+                    "connection_type": conn.origin_connection,
+                    "parsed_config": src.parsed_config,
+                    "configuration_xml": src.configuration_xml,
+                }
+                if src.tool_id in self.text_inputs:
+                    source_tools[conn.origin_tool_id]["text_input_data"] = self.text_inputs[src.tool_id]
+
+        virtual_container = Container(
+            tool_id=-1,
+            name="Main_Workflow",
+            child_tool_ids=list(root_tool_ids),
+            child_tools=tools,
+        )
+
+        return {
+            "container": virtual_container,
+            "tools": tools,
+            "internal_connections": internal_connections,
+            "external_inputs": external_inputs,
+            "external_outputs": external_outputs,
+            "sub_containers": [],
+            "text_input_data": text_input_data,
+            "source_tools": source_tools,
+        }
+
     def _find_tool_container_name(self, tool_id: int) -> str:
         """Find which container a tool belongs to."""
         tool = self.all_tools.get(tool_id)
