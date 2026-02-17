@@ -367,15 +367,15 @@ class NotebookGenerator:
             "",
         ]
 
-        # Find the last DataFrame in the flow
-        # Use the last tool's output as the final result
-        lines.append("# Select final output columns and write")
+        # Use the last tool's actual output DataFrame name
+        final_df = code_gen.get_last_output_df()
+        lines.append(f"# Final output from: {final_df}")
 
         if output_cols:
             cols_str = ", ".join(f'"{c}"' for c in output_cols)
-            lines.append(f"df_output = df_result.select({cols_str})")
+            lines.append(f"df_output = {final_df}.select({cols_str})")
         else:
-            lines.append("df_output = df_result")
+            lines.append(f"df_output = {final_df}")
 
         lines.append("")
         lines.append(f'df_output.write.mode("overwrite").saveAsTable("{table_name}")')

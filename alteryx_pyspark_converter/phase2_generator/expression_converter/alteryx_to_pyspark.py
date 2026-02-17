@@ -172,7 +172,89 @@ class AlteryxExpressionConverter:
         for i, lit in enumerate(literals):
             result = result.replace(f"__STR_{i}__", lit)
 
+        # Convert string concatenation with + to F.concat()
+        result = self._convert_string_concat(result)
+
         return result
+
+    def _convert_string_concat(self, expr: str) -> str:
+        """Convert Alteryx string '+' concatenation to F.concat().
+
+        In Alteryx, strings are concatenated with +:
+            [FirstName] + " " + [LastName]
+        becomes:
+            F.concat(F.col("FirstName"), F.lit(" "), F.col("LastName"))
+        """
+        # Only convert if there's a + between string/col expressions
+        # Check if expression contains + with string or column operands
+        if '+' not in expr:
+            return expr
+
+        # Split by + while respecting parentheses and strings
+        parts = self._split_by_plus(expr)
+        if len(parts) <= 1:
+            return expr
+
+        # Check if this looks like string concatenation (not arithmetic)
+        has_string_or_col = any(
+            'F.col(' in p or 'F.lit(' in p or p.strip().startswith('"')
+            for p in parts
+        )
+        has_numeric = all(
+            self._is_numeric_expr(p.strip()) for p in parts
+        )
+
+        if has_string_or_col and not has_numeric:
+            converted = []
+            for part in parts:
+                part = part.strip()
+                if part.startswith('"') and part.endswith('"'):
+                    converted.append(f'F.lit({part})')
+                else:
+                    converted.append(part)
+            return f"F.concat({', '.join(converted)})"
+
+        return expr
+
+    def _split_by_plus(self, expr: str) -> list[str]:
+        """Split expression by + operator, respecting parentheses and strings."""
+        parts = []
+        current = []
+        depth = 0
+        in_string = False
+
+        for char in expr:
+            if char == '"' and (not current or current[-1] != '\\'):
+                in_string = not in_string
+                current.append(char)
+            elif in_string:
+                current.append(char)
+            elif char == '(':
+                depth += 1
+                current.append(char)
+            elif char == ')':
+                depth -= 1
+                current.append(char)
+            elif char == '+' and depth == 0:
+                parts.append(''.join(current).strip())
+                current = []
+            else:
+                current.append(char)
+
+        if current:
+            remaining = ''.join(current).strip()
+            if remaining:
+                parts.append(remaining)
+
+        return parts
+
+    def _is_numeric_expr(self, expr: str) -> bool:
+        """Check if an expression is purely numeric."""
+        try:
+            float(expr)
+            return True
+        except ValueError:
+            return False
 
     def _convert_function_call(self, expr: str) -> str:
         """Convert an Alteryx function call to PySpark."""

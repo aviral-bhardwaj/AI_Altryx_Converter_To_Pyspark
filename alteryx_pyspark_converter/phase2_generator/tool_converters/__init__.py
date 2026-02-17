@@ -12,6 +12,13 @@ from .sort_converter import SortConverter
 from .unique_converter import UniqueConverter
 from .sample_converter import SampleConverter
 from .textinput_converter import TextInputConverter
+from .recordid_converter import RecordIDConverter
+from .transpose_converter import TransposeConverter
+from .multirow_formula_converter import MultiRowFormulaConverter
+from .regex_converter import RegExConverter
+from .append_fields_converter import AppendFieldsConverter
+from .find_replace_converter import FindReplaceConverter
+from .dynamic_rename_converter import DynamicRenameConverter
 from .lockin_converter import (
     LockInInputConverter,
     LockInWriteConverter,
@@ -40,6 +47,15 @@ CONVERTER_MAP: dict[str, type[BaseToolConverter]] = {
     "Unique": UniqueConverter,
     "Sample": SampleConverter,
     "TextInput": TextInputConverter,
+    "RecordID": RecordIDConverter,
+    "Transpose": TransposeConverter,
+    "MultiRowFormula": MultiRowFormulaConverter,
+    "RegEx": RegExConverter,
+    "AppendFields": AppendFieldsConverter,
+    "FindReplace": FindReplaceConverter,
+    "DynamicRename": DynamicRenameConverter,
+    # Alteryx Select tool sometimes appears as "AlteryxSelect"
+    "AlteryxSelect": SelectConverter,
     # LockIn tools
     "LockInFilter": LockInFilterConverter,
     "LockInJoin": LockInJoinConverter,
@@ -69,6 +85,13 @@ __all__ = [
     "UniqueConverter",
     "SampleConverter",
     "TextInputConverter",
+    "RecordIDConverter",
+    "TransposeConverter",
+    "MultiRowFormulaConverter",
+    "RegExConverter",
+    "AppendFieldsConverter",
+    "FindReplaceConverter",
+    "DynamicRenameConverter",
     "LockInInputConverter",
     "LockInWriteConverter",
 ]

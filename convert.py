@@ -59,6 +59,17 @@ def main():
         help="Parse and extract containers but don't call Claude AI.",
     )
     parser.add_argument(
+        "--analyze",
+        action="store_true",
+        help="Autonomously analyze the workflow and print a detailed report "
+             "with complexity assessment, data sources, and suggested config.",
+    )
+    parser.add_argument(
+        "--generate-config",
+        action="store_true",
+        help="Auto-generate a YAML config file for the workflow.",
+    )
+    parser.add_argument(
         "--max-retries",
         type=int,
         default=2,
@@ -81,7 +92,8 @@ def main():
         sys.exit(1)
 
     api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key and not args.dry_run and not args.list_containers:
+    if not api_key and not args.dry_run and not args.list_containers \
+            and not args.analyze and not args.generate_config:
         print("❌ ANTHROPIC_API_KEY environment variable is required.")
         print("   Set it with: export ANTHROPIC_API_KEY=sk-ant-...")
         sys.exit(1)
@@ -103,6 +115,40 @@ def main():
         for i, container in enumerate(workflow.containers, 1):
             tool_count = len(container.child_tools)
             print(f"   {i:2d}. {container.name:<40s} ({tool_count} tools)")
+        sys.exit(0)
+
+    # ── Autonomous analysis mode ──────────────────────────────────────
+    if args.analyze:
+        try:
+            from alteryx_pyspark_converter.common.workflow_analyzer import WorkflowAnalyzer
+            analyzer = WorkflowAnalyzer(workflow)
+            report = analyzer.print_report()
+            print(report)
+        except ImportError:
+            # Minimal analysis if the analyzer isn't available
+            print("\n📊 Workflow Analysis:")
+            for container in workflow.containers:
+                context = workflow.get_container_context(container.tool_id)
+                print(f"\n  Container: {container.name}")
+                print(f"    Tools: {len(container.child_tools)}")
+                print(f"    Inputs: {len(context['external_inputs'])}")
+                print(f"    Outputs: {len(context['external_outputs'])}")
+        sys.exit(0)
+
+    # ── Auto-generate config mode ─────────────────────────────────────
+    if args.generate_config:
+        try:
+            from alteryx_pyspark_converter.common.workflow_analyzer import WorkflowAnalyzer
+            analyzer = WorkflowAnalyzer(workflow)
+            container_name = args.container or ""
+            config_yaml = analyzer.generate_config_yaml(container_name)
+            config_file = Path(args.output_dir) / "auto_config.yaml"
+            config_file.parent.mkdir(parents=True, exist_ok=True)
+            config_file.write_text(config_yaml, encoding="utf-8")
+            print(f"\n📝 Auto-generated config written to: {config_file}")
+            print(config_yaml)
+        except ImportError:
+            print("❌ Could not load workflow analyzer")
         sys.exit(0)
 
     # ── Filter to specific container if requested ────────────────────

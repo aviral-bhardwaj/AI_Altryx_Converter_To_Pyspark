@@ -82,23 +82,40 @@ class ClaudeCodeGenerator:
 
         user_message = f"""Convert the following Alteryx container to a complete PySpark Databricks notebook.
 
+IMPORTANT: Read through the entire container description below carefully before writing any code. Understand the full data flow first, then generate code step by step.
+
 {container_description}
 
-## CHECKLIST - Your generated code MUST include:
-1. First line MUST be: # Databricks notebook source
-2. Use # COMMAND ---------- between every cell
-3. Use # MAGIC %md header cells before each code section
-4. spark.table() calls for ALL {num_ext_inputs} external source inputs
-5. Transformation code for ALL {num_tools} tools listed above
-6. Proper data flow following ALL {num_int_conns} internal connections
-7. For each Join: use the exact join keys specified, handle post-join column drops/renames
-8. For each Filter: generate the True/False outputs that are used downstream
-9. For each Formula: convert ALL formula fields to .withColumn() calls
-10. For each Select: drop deselected columns, apply renames
-11. Final output as createOrReplaceTempView() or write statement
+## STEP-BY-STEP INSTRUCTIONS:
 
-CRITICAL: Output must be in Databricks notebook format (NOT plain Python).
-Output ONLY the code. No markdown fences, no explanations before or after."""
+**Step 1: Analyze the data flow**
+- Count all {num_ext_inputs} external inputs - each needs a spark.table() call
+- Trace the {num_int_conns} connections to understand which tool feeds into which
+- Identify the execution order (tools with no internal inputs first, then downstream)
+
+**Step 2: Generate source table loads**
+- Create a spark.table() call for each external input
+- Use MEANINGFUL variable names based on the table name or annotation (e.g., df_fact_nps, NOT df_input_1)
+
+**Step 3: Generate transformation code for all {num_tools} tools**
+- Process each tool in dependency order
+- Use LOGICAL variable names that describe what the data contains AFTER the transformation
+- Include a comment with Tool ID for traceability
+
+**Step 4: Write final output**
+- Create a temp view or write statement for the final DataFrame
+
+## VARIABLE NAMING REMINDER:
+- GOOD: df_active_customers, df_nps_with_provider, df_summary_by_region
+- BAD: df_filter_42, df_join_15, df_summarize_88, df_1, df_result
+
+## FORMAT REMINDER:
+- First line: # Databricks notebook source
+- Cells separated by: # COMMAND ----------
+- Markdown cells: # MAGIC %md
+- Each transformation step in its own cell
+
+Output ONLY the Databricks notebook code. No markdown fences, no explanations before or after the code."""
 
         # Call Claude with retries
         code = None
@@ -147,7 +164,7 @@ Output ONLY the code. No markdown fences, no explanations before or after."""
         """Call Claude using the anthropic Python SDK."""
         message = self.client.messages.create(
             model=self.model,
-            max_tokens=16000,
+            max_tokens=32000,
             system=system_prompt,
             messages=[
                 {"role": "user", "content": user_message},

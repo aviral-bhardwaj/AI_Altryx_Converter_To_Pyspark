@@ -9,6 +9,7 @@ from ..config.column_mapping import ColumnMapper
 from ..expression_converter.alteryx_to_pyspark import AlteryxExpressionConverter
 from ..tool_converters import CONVERTER_MAP, BaseToolConverter
 from .flow_analyzer import FlowAnalyzer
+from .semantic_namer import SemanticNamer
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +19,8 @@ class CodeGenerator:
     Generate PySpark code for tools using the appropriate converter.
 
     Manages DataFrame naming and coordinates between tool converters.
+    Uses SemanticNamer for intelligent, context-aware variable names
+    instead of generic names like df_join_42.
     """
 
     def __init__(
@@ -46,6 +49,12 @@ class CodeGenerator:
         # Track DataFrame names: tool_id -> {connection_name: df_var_name}
         self.df_names: dict[int, dict[str, str]] = {}
 
+        # Semantic namer for intelligent variable names
+        self.namer = SemanticNamer(workflow, self.flow_analyzer)
+
+        # Track the last generated DataFrame name (for final output)
+        self._last_output_df: str | None = None
+
     def generate_tool_code(
         self,
         tool: Tool,
@@ -71,8 +80,12 @@ class CodeGenerator:
         # Get input DataFrame names
         input_dfs = self._resolve_input_dfs(tool, container_id)
 
-        # Get output DataFrame name
-        output_prefix = self._make_df_name(tool)
+        # Get intelligent output DataFrame name via semantic namer
+        output_prefix = self.namer.resolve_name(
+            tool=tool,
+            container_id=container_id,
+            upstream_names=input_dfs,
+        )
 
         # Get converter
         converter_class = CONVERTER_MAP.get(tool_type)
@@ -126,7 +139,11 @@ class CodeGenerator:
         Returns:
             PySpark code to load the table.
         """
-        df_name = f"df_input_{table_key}"
+        df_name = self.namer.resolve_input_source_name(
+            table_key=table_key,
+            table_name=table_name,
+            tool_id=tool_id,
+        )
 
         code = f'# Load input: {table_key}\n'
         code += f'{df_name} = spark.table("{table_name}")\n'
@@ -150,6 +167,14 @@ class CodeGenerator:
                 self.df_names[tool_id].get("Output"),
             )
         return None
+
+    def get_last_output_df(self) -> str:
+        """Return the last DataFrame variable that was generated.
+
+        This is used by the notebook generator to write the final output
+        instead of assuming a hardcoded ``df_result``.
+        """
+        return self._last_output_df or "df_result"
 
     def _resolve_input_dfs(
         self, tool: Tool, container_id: int
@@ -175,6 +200,8 @@ class CodeGenerator:
                     "Join": "Join",
                     "Left": "Left",
                     "Right": "Right",
+                    "Unique": "Unique",
+                    "Dupes": "Dupes",
                 }
                 source_key = conn_map.get(from_conn, "Output")
 
@@ -211,13 +238,14 @@ class CodeGenerator:
                 output_df_name=output_prefix,
                 right_df_name=right_input,
             )
-            # Register all three outputs
+            # Register all three outputs with descriptive suffixes
             self.df_names[tool.tool_id] = {
-                "Join": f"{output_prefix}_join",
-                "Left": f"{output_prefix}_left",
-                "Right": f"{output_prefix}_right",
-                "Output": f"{output_prefix}_join",  # Default to inner join
+                "Join": f"{output_prefix}_matched",
+                "Left": f"{output_prefix}_left_unmatched",
+                "Right": f"{output_prefix}_right_unmatched",
+                "Output": f"{output_prefix}_matched",  # Default to inner join
             }
+            self._last_output_df = f"{output_prefix}_matched"
 
         elif tool_type in ("Filter", "LockInFilter"):
             code = converter.generate_code(
@@ -229,6 +257,7 @@ class CodeGenerator:
                 "False": f"{output_prefix}_false",
                 "Output": f"{output_prefix}_true",  # Default to true branch
             }
+            self._last_output_df = f"{output_prefix}_true"
 
         elif tool_type in ("Unique", "LockInUnique"):
             code = converter.generate_code(
@@ -237,9 +266,10 @@ class CodeGenerator:
             )
             self.df_names[tool.tool_id] = {
                 "Unique": f"{output_prefix}_unique",
-                "Dupes": f"{output_prefix}_dupes",
+                "Dupes": f"{output_prefix}_duplicates",
                 "Output": f"{output_prefix}_unique",
             }
+            self._last_output_df = f"{output_prefix}_unique"
 
         elif tool_type in ("Union", "LockInUnion"):
             # Gather all input DataFrames
@@ -295,6 +325,7 @@ class CodeGenerator:
     def _register_output(self, tool: Tool, df_name: str) -> None:
         """Register a simple tool output DataFrame name."""
         self.df_names[tool.tool_id] = {"Output": df_name}
+        self._last_output_df = df_name
 
     def _register_passthrough(self, tool: Tool, container_id: int) -> None:
         """For skip tools, pass through the input DataFrame name."""
@@ -306,16 +337,3 @@ class CodeGenerator:
         )
         if primary:
             self.df_names[tool.tool_id] = {"Output": primary}
-
-    def _make_df_name(self, tool: Tool) -> str:
-        """Create a DataFrame variable name for a tool."""
-        # Use annotation if available, cleaned up for Python variable naming
-        if tool.annotation:
-            name = tool.annotation.lower()
-            name = "".join(c if c.isalnum() or c == "_" else "_" for c in name)
-            name = name.strip("_")
-            if name and name[0].isdigit():
-                name = f"t_{name}"
-            return f"df_{name}_{tool.tool_id}"
-
-        return f"df_{tool.tool_type.lower()}_{tool.tool_id}"

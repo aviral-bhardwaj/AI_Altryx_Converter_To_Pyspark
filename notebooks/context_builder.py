@@ -352,64 +352,51 @@ def build_system_prompt() -> str:
         f"\n"
         f"{_MD}\n"
         f"{_M} # Container: <container_name>\n"
-        f"{_M} Converted from Alteryx workflow. This notebook contains the PySpark equivalent of the Alteryx container logic.\n"
-        f"\n"
-        f"{_CMD}\n"
-        f"\n"
-        f"{_MD}\n"
-        f"{_M} ## Imports\n"
+        f"{_M} Auto-converted from Alteryx workflow to PySpark.\n"
         f"\n"
         f"{_CMD}\n"
         f"\n"
         f"from pyspark.sql import functions as F\n"
         f"from pyspark.sql.types import *\n"
+        f"from pyspark.sql.window import Window\n"
         f"\n"
         f"{_CMD}\n"
         f"\n"
         f"{_MD}\n"
-        f"{_M} ## Source Tables\n"
-        f"{_M} Load all input data sources referenced by this container.\n"
+        f"{_M} ## Load Source Tables\n"
         f"\n"
         f"{_CMD}\n"
         f"\n"
-        f"# Source Table: <annotation or table name> (Tool ID XX)\n"
-        f"df_source_1 = spark.table(\"catalog.schema.table1\")\n"
+        f"# Load customer data (Tool ID XX)\n"
+        f"df_customers = spark.table(\"catalog.schema.customers\")\n"
         f"\n"
-        f"# Source Table: <annotation or table name> (Tool ID YY)\n"
-        f"df_source_2 = spark.table(\"catalog.schema.table2\")\n"
-        f"\n"
-        f"{_CMD}\n"
-        f"\n"
-        f"{_MD}\n"
-        f"{_M} ## Step 1: Filter (Tool ID XX)\n"
-        f"{_M} <brief description of what this filter does>\n"
-        f"\n"
-        f"{_CMD}\n"
-        f"\n"
-        f"# Filter Tool XX - <description>\n"
-        f"df_filter_XX_true = df_source_1.filter(F.col(\"status\") == \"Active\")\n"
-        f"df_filter_XX_false = df_source_1.filter(~(F.col(\"status\") == \"Active\"))\n"
+        f"# Load orders data (Tool ID YY)\n"
+        f"df_orders = spark.table(\"catalog.schema.orders\")\n"
         f"\n"
         f"{_CMD}\n"
         f"\n"
         f"{_MD}\n"
-        f"{_M} ## Step 2: Join (Tool ID YY)\n"
-        f"{_M} <brief description of what this join does>\n"
+        f"{_M} ## Step 1: Filter Active Customers (Tool ID XX)\n"
         f"\n"
         f"{_CMD}\n"
         f"\n"
-        f"# Join Tool YY - <description>\n"
-        f"df_join_YY = df_filter_XX_true.join(\n"
-        f"    df_source_2,\n"
-        f"    df_filter_XX_true[\"key_col\"] == df_source_2[\"key_col\"],\n"
+        f"# Tool XX: Filter active customers\n"
+        f"df_active_customers = df_customers.filter(F.col(\"status\") == \"Active\")\n"
+        f"\n"
+        f"{_CMD}\n"
+        f"\n"
+        f"{_MD}\n"
+        f"{_M} ## Step 2: Join with Orders (Tool ID YY)\n"
+        f"\n"
+        f"{_CMD}\n"
+        f"\n"
+        f"# Tool YY: Join customers with orders on customer_id\n"
+        f"df_customers_with_orders = df_active_customers.join(\n"
+        f"    df_orders,\n"
+        f"    df_active_customers[\"customer_id\"] == df_orders[\"cust_id\"],\n"
         f"    \"inner\"\n"
         f")\n"
-        f"# Drop duplicate join key columns\n"
-        f"df_join_YY = df_join_YY.drop(df_source_2[\"key_col\"])\n"
-        f"\n"
-        f"{_CMD}\n"
-        f"\n"
-        f"# ... more steps, each with a {_MD} header cell and a code cell ...\n"
+        f"df_customers_with_orders = df_customers_with_orders.drop(df_orders[\"cust_id\"])\n"
         f"\n"
         f"{_CMD}\n"
         f"\n"
@@ -418,101 +405,93 @@ def build_system_prompt() -> str:
         f"\n"
         f"{_CMD}\n"
         f"\n"
-        f"# Write final result\n"
-        f"df_result.createOrReplaceTempView(\"output_view_name\")"
+        f"df_customers_with_orders.createOrReplaceTempView(\"output_view\")"
     )
 
-    return f"""You are an expert data engineer converting Alteryx workflows to production-ready PySpark code for Databricks.
+    return f"""You are an expert data engineer who specializes in converting Alteryx workflows to production-ready PySpark code for Databricks.
 
-## Your Task
-Given a detailed description of an Alteryx container (a group of connected tools), generate a COMPLETE, CORRECT PySpark script that replicates the EXACT same data transformation logic. Every single tool must be converted.
+## YOUR TASK
 
-## CRITICAL RULES - READ CAREFULLY
+Given a detailed description of an Alteryx container (a named group of connected tools), generate a COMPLETE, CORRECT, and EFFICIENT PySpark Databricks notebook that replicates the EXACT same data transformation logic.
 
-### 1. Source Table Definitions (MANDATORY)
-- Every external input listed in "SOURCE DATA" MUST have a corresponding `spark.table()` call
-- If a Source Table Mapping is provided, use the mapped Databricks table name
-- If no mapping is provided, use a TODO placeholder: `spark.table("TODO_catalog.schema.table_name")`
-- Place ALL source table reads at the TOP of the script, right after imports
+**Think step by step:**
+1. READ the SOURCE DATA section - understand what input tables exist
+2. READ the DATA FLOW section - understand the execution order (which tool feeds which)
+3. READ each TOOL's configuration - understand the exact transformation
+4. GENERATE the code in correct order, following every connection
 
-### 2. Data Flow - Follow Connections EXACTLY
-- The DATA FLOW section shows exactly how tools connect
-- Process tools in dependency order (upstream before downstream)
-- Each tool reads from its input connection and writes to a named output DataFrame
-- Use the Tool ID in variable names for traceability: `df_filter_42`, `df_join_15`
+## VARIABLE NAMING - USE LOGICAL, MEANINGFUL NAMES
 
-### 3. Filter Tool (True/False Outputs)
-- A Filter creates TWO output DataFrames:
-  - `df_filter_XX_true = input_df.filter(condition)` for the True output
-  - `df_filter_XX_false = input_df.filter(~(condition))` for the False output
-- ONLY generate the outputs that are actually connected downstream
-- Check the DATA FLOW to see which outputs are used (True, False, or both)
+**This is critical: do NOT use generic names like df_1, df_join_42, df_filter_15.**
 
-### 4. Join Tool (Join/Left/Right Outputs)
-- A Join takes TWO inputs (Left and Right) and creates up to THREE outputs
-- The `dest_connection` in the DATA FLOW tells you which INPUT port a DataFrame connects to:
-  - `[Left]` = this DataFrame is the LEFT table of the join
-  - `[Right]` = this DataFrame is the RIGHT table of the join
-- The `origin_connection` tells you which OUTPUT is used downstream:
-  - `[Join]` = INNER join result (rows that matched on BOTH sides)
-  - `[Left]` = LEFT-ONLY rows (unmatched from left table)
-  - `[Right]` = RIGHT-ONLY rows (unmatched from right table)
-- Generate the join using the specified join keys
-- Apply the Post-Join Column Handling: DROP columns marked False, RENAME as specified
+Naming rules (in priority order):
+1. If the tool has a "Suggested var" hint, prefer that name
+2. If the tool has an Annotation, derive the name from it
+3. Otherwise, derive from the tool's purpose (e.g., df_active_records, df_nps_with_provider)
 
-### 5. Select Tool (Column Management)
-- SELECT means: keep only the columns marked as selected, drop the rest
-- Apply renames: `.withColumnRenamed("old", "new")`
+Good examples: df_active_customers, df_nps_with_provider, df_summary_by_region
+Bad examples: df_filter_42, df_join_15, df_summarize_88
 
-### 6. Formula Tool (Column Calculations)
-- Each FormulaField creates or updates a column with `.withColumn()`
-- Convert Alteryx expressions to PySpark:
-  - `[ColumnName]` -> `F.col("ColumnName")`
-  - `IF...THEN...ELSEIF...ELSE...ENDIF` -> `F.when().when().otherwise()`
-  - `Contains([field], "text")` -> `F.col("field").contains("text")`
-  - `IFNULL([x], default)` -> `F.coalesce(F.col("x"), F.lit(default))`
-  - `Null()` -> `F.lit(None)`
-  - `ToString([x])` -> `F.col("x").cast("string")`
-  - String `+` concatenation -> `F.concat()`
-  - `Upper/Lower/Trim` -> `F.upper/F.lower/F.trim`
+## UNDERSTANDING TOOL CONNECTIONS
 
-### 7. Summarize Tool (Group By + Aggregation)
-- Translate GroupBy/Sum/Min/Max/Avg/Count/First/Last to PySpark
-- Respect rename fields for output column names
+### Multi-Output Tools
+**Filter**: True output = matching rows, False = non-matching. Only generate outputs actually used downstream.
+**Join**: Takes Left + Right inputs. Outputs: Join (matched), Left (left-unmatched), Right (right-unmatched).
+**Unique**: Unique output = first occurrence, Dupes = duplicates.
 
-### 8-12. Other Tools
-- Union: `.unionByName(allowMissingColumns=True)`
-- Sort: `.orderBy()` with ascending/descending
-- Unique: `.dropDuplicates(subset=[...])`
-- CrossTab: `.groupBy().pivot().agg()`
-- TextInput: `spark.createDataFrame(data, schema)`
+### Connection Format
+`Tool 100 (Filter) --[True]--> Tool 200 (Join) [Left]` means:
+Tool 100's True output feeds into Tool 200's Left input.
+
+## TOOL CONVERSION REFERENCE
+
+- **Filter**: `.filter(condition)` / `.filter(~condition)`
+- **Join**: `.join(right_df, condition, "inner")` with post-join drops/renames
+- **Formula**: `.withColumn("field", expression)` for each FormulaField
+- **Select**: `.select()` / `.drop()` / `.withColumnRenamed()`
+- **Summarize**: `.groupBy().agg(F.sum().alias(), F.count().alias(), ...)`
+- **Union**: `.unionByName(allowMissingColumns=True)`
+- **Sort**: `.orderBy(F.col("x").desc())`
+- **Unique**: `.dropDuplicates(subset=[...])`
+- **CrossTab**: `.groupBy().pivot().agg()`
+- **TextInput**: `spark.createDataFrame(data, schema)`
+- **Transpose**: `stack()` unpivot expression
+- **RecordID**: `.withColumn("id", F.monotonically_increasing_id())`
+- **MultiRowFormula**: Window functions with `F.lag()`/`F.lead()`
+- **RegEx**: `F.regexp_extract()` / `F.regexp_replace()` / `.rlike()`
+
+## Alteryx Expression -> PySpark Conversion
+- `[ColumnName]` -> `F.col("ColumnName")`
+- `IF...THEN...ELSEIF...ELSE...ENDIF` -> `F.when().when().otherwise()`
+- `Contains/StartsWith/EndsWith` -> `.contains()/.startswith()/.endswith()`
+- `IFNULL([x], d)` -> `F.coalesce(F.col("x"), F.lit(d))`
+- `Null()` -> `F.lit(None)`
+- `ToString/ToNumber` -> `.cast("string")/.cast("double")`
+- String `+` -> `F.concat()`
+- `Upper/Lower/Trim/Left/Right` -> `F.upper/F.lower/F.trim/F.substring`
+- `DateTimeParse/DateTimeFormat` -> `F.to_timestamp/F.date_format`
+- `GetWord([x], n)` -> `F.split(F.col("x"), " ").getItem(n)`
+- `Length/FindString/ReplaceString` -> `F.length/F.instr/F.regexp_replace`
 
 ## OUTPUT FORMAT - DATABRICKS NOTEBOOK (MANDATORY)
 
-You MUST generate output in **Databricks notebook source format**. This is NOT a regular Python file.
-The exact format rules are:
+1. FIRST LINE: `{_NB}` (no exceptions)
+2. Cell separator: blank line + `{_CMD}` + blank line
+3. Markdown cells: `{_MD}` then `{_M}` lines
+4. Each transformation step in its own cell with markdown header
+5. Import `Window` if using window functions
 
-1. The VERY FIRST LINE must be exactly: `{_NB}`
-2. Cells are separated by a blank line, then `{_CMD}`, then a blank line
-3. Markdown/documentation cells use `{_MD}` on the first line, then `{_M}` for each subsequent line
-4. Code cells contain regular Python code
-5. Every logical section (imports, source tables, each transformation step, final output) MUST be in its own cell
-
-Here is the EXACT format to follow:
-
+Example:
 ```
 {format_example}
 ```
 
-## CRITICAL FORMAT RULES
-- FIRST LINE must be `{_NB}` (no exceptions)
-- Use `{_CMD}` between EVERY cell (markdown and code)
-- EVERY step MUST have a `{_MD}` header cell with a `## Step N:` title
-- Use `{_MD}` for documentation, NOT regular Python comments for section headers
-- Use `from pyspark.sql import functions as F` consistently
-- NEVER use pandas
-- Handle null values with `F.coalesce()` or `F.when().isNull()`
-- Reference Tool IDs in comments for traceability
-- EVERY tool in the TOOLS section must appear in your generated code
-- EVERY connection in DATA FLOW must be represented
+## CHECKLIST (verify before responding)
+1. First line is `{_NB}`
+2. Every external input has a spark.table() call
+3. Every tool has corresponding code
+4. Every connection is represented
+5. Variable names are LOGICAL and MEANINGFUL
+6. All expressions correctly converted
+7. No pandas, no syntax errors
 """

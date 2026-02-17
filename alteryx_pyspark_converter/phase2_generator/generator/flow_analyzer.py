@@ -10,6 +10,16 @@ from ...phase1_parser.models.tool import Tool
 logger = logging.getLogger(__name__)
 
 
+def _conn_dest_id(conn) -> int:
+    """Get destination tool ID from a connection, supporting both models."""
+    return getattr(conn, 'destination_tool_id', None) or getattr(conn, 'dest_tool_id', 0)
+
+
+def _conn_dest_conn(conn) -> str:
+    """Get destination connection name from a connection, supporting both models."""
+    return getattr(conn, 'destination_connection', None) or getattr(conn, 'dest_connection', 'Input')
+
+
 class DataFlowEdge:
     """Represents a directed edge in the data flow graph."""
 
@@ -62,7 +72,10 @@ class FlowAnalyzer:
 
         # Get all tool IDs in this container (including sub-containers)
         all_tool_ids = set(container.child_tool_ids)
-        for sub_id in container.child_container_ids:
+        # Support both attribute names: child_container_ids (phase1) and sub_container_ids (src)
+        sub_ids = getattr(container, 'child_container_ids', None) or \
+                  getattr(container, 'sub_container_ids', [])
+        for sub_id in sub_ids:
             sub = self.workflow.get_container(sub_id)
             if sub:
                 all_tool_ids.update(sub.child_tool_ids)
@@ -74,16 +87,19 @@ class FlowAnalyzer:
 
         # Also add entries for external sources
         for conn in self.workflow.connections:
-            if conn.destination_tool_id in all_tool_ids:
+            dest_id = _conn_dest_id(conn)
+            dest_conn = _conn_dest_conn(conn)
+
+            if dest_id in all_tool_ids:
                 edge = DataFlowEdge(
                     from_tool_id=conn.origin_tool_id,
-                    to_tool_id=conn.destination_tool_id,
+                    to_tool_id=dest_id,
                     from_connection=conn.origin_connection,
-                    to_connection=conn.destination_connection,
+                    to_connection=dest_conn,
                 )
 
-                if conn.destination_tool_id in flow:
-                    flow[conn.destination_tool_id]["inputs"].append(edge)
+                if dest_id in flow:
+                    flow[dest_id]["inputs"].append(edge)
 
                 if conn.origin_tool_id in all_tool_ids:
                     if conn.origin_tool_id in flow:

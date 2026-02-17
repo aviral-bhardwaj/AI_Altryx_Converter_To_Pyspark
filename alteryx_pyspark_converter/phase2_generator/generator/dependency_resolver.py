@@ -43,7 +43,10 @@ class DependencyResolver:
 
         # Get all tool IDs in the container
         all_tool_ids = set(container.child_tool_ids)
-        for sub_id in container.child_container_ids:
+        # Support both attribute names: child_container_ids (phase1) and sub_container_ids (src)
+        sub_ids = getattr(container, 'child_container_ids', None) or \
+                  getattr(container, 'sub_container_ids', [])
+        for sub_id in sub_ids:
             sub = self.workflow.get_container(sub_id)
             if sub:
                 all_tool_ids.update(sub.child_tool_ids)
