@@ -59,8 +59,9 @@ def _extract_tool_type(plugin_str: str) -> str:
     """Extract short tool type from plugin string."""
     if not plugin_str:
         return "Unknown"
-    # Try known suffixes
-    for key, value in PLUGIN_TYPE_MAP.items():
+    # Try known suffixes, longest match first to avoid partial matches
+    # (e.g., "Formula" matching inside "MultiRowFormula")
+    for key, value in sorted(PLUGIN_TYPE_MAP.items(), key=lambda x: -len(x[0])):
         if key in plugin_str:
             return value
     # Fallback: last dotted segment
