@@ -1,0 +1,178 @@
+# ═══════════════════════════════════════════════════════════════════
+# Alteryx tool → PySpark/Databricks conversion mapping
+# ═══════════════════════════════════════════════════════════════════
+# This file drives the converter engine (src/converter_engine.py).
+#
+# To add or override a tool mapping WITHOUT touching core code:
+#   1. Implement a ToolConverter subclass anywhere importable
+#      (recommended: a new module under src/tools/).
+#   2. Point `tools.<AlteryxToolType>.converter` at its dotted path.
+#
+# `support` is documentation for the report: full | partial | passthrough.
+# `spark_equivalent` is shown to users in the Skill Mode notebook.
+
+version: 1
+
+defaults:
+  fallback_converter: src.tools.builtin.PassthroughConverter
+  unsupported_message: >-
+    This Alteryx tool has no registered converter. The data stream is passed
+    through unchanged; add a plugin in src/tools/ or map it here.
+
+tools:
+  InputData:
+    converter: src.tools.builtin.InputDataConverter
+    support: full
+    spark_equivalent: spark.table() / spark.read (Delta, CSV, Parquet, Excel)
+  DynamicInput:
+    converter: src.tools.builtin.InputDataConverter
+    support: partial
+    spark_equivalent: spark.table() / spark.read
+  TextInput:
+    converter: src.tools.builtin.TextInputConverter
+    support: full
+    spark_equivalent: spark.createDataFrame() with inline rows
+  OutputData:
+    converter: src.tools.builtin.OutputDataConverter
+    support: full
+    spark_equivalent: df.write.format("delta").saveAsTable() + temp view
+  Filter:
+    converter: src.tools.builtin.FilterConverter
+    support: full
+    spark_equivalent: df.filter() with True/False output ports
+  Formula:
+    converter: src.tools.builtin.FormulaConverter
+    support: full
+    spark_equivalent: df.withColumn() + expression parser
+  Select:
+    converter: src.tools.builtin.SelectConverter
+    support: full
+    spark_equivalent: drop / withColumnRenamed / cast
+  Join:
+    converter: src.tools.builtin.JoinConverter
+    support: full
+    spark_equivalent: df.join() (inner + left_anti/right_anti for J/L/R ports)
+  Union:
+    converter: src.tools.builtin.UnionConverter
+    support: full
+    spark_equivalent: unionByName(allowMissingColumns=True)
+  Summarize:
+    converter: src.tools.builtin.SummarizeConverter
+    support: full
+    spark_equivalent: groupBy().agg()
+  Sort:
+    converter: src.tools.builtin.SortConverter
+    support: full
+    spark_equivalent: orderBy()
+  Unique:
+    converter: src.tools.builtin.UniqueConverter
+    support: full
+    spark_equivalent: dropDuplicates() (+ exceptAll for Dupes port)
+  Sample:
+    converter: src.tools.builtin.SampleConverter
+    support: full
+    spark_equivalent: limit()
+  CrossTab:
+    converter: src.tools.builtin.CrossTabConverter
+    support: full
+    spark_equivalent: groupBy().pivot().agg()
+  Transpose:
+    converter: src.tools.builtin.TransposeConverter
+    support: full
+    spark_equivalent: select(stack(...)) unpivot
+  MultiRowFormula:
+    converter: src.tools.builtin.MultiRowFormulaConverter
+    support: partial
+    spark_equivalent: Window lag()/lead()
+  RegEx:
+    converter: src.tools.builtin.RegExConverter
+    support: full
+    spark_equivalent: regexp_extract / regexp_replace / rlike
+  RecordID:
+    converter: src.tools.builtin.RecordIDConverter
+    support: full
+    spark_equivalent: monotonically_increasing_id()
+  AppendFields:
+    converter: src.tools.builtin.AppendFieldsConverter
+    support: full
+    spark_equivalent: crossJoin()
+  RunningTotal:
+    converter: src.tools.builtin.RunningTotalConverter
+    support: partial
+    spark_equivalent: Window running sum
+  TextToColumns:
+    converter: src.tools.builtin.TextToColumnsConverter
+    support: partial
+    spark_equivalent: F.split() / explode()
+  DateTime:
+    converter: src.tools.builtin.DateTimeConverter
+    support: partial
+    spark_equivalent: to_date / date_format
+  DynamicRename:
+    converter: src.tools.builtin.DynamicRenameConverter
+    support: partial
+    spark_equivalent: withColumnRenamed loop
+  GenerateRows:
+    converter: src.tools.builtin.GenerateRowsConverter
+    support: partial
+    spark_equivalent: spark.range()
+  MultiFieldFormula:
+    converter: src.tools.builtin.MultiFieldFormulaConverter
+    support: partial
+    spark_equivalent: withColumn loop over fields
+  FindReplace:
+    converter: src.tools.builtin.FindReplaceConverter
+    support: partial
+    spark_equivalent: regexp_replace / join-based lookup
+  Browse:
+    converter: src.tools.builtin.BrowseConverter
+    support: full
+    spark_equivalent: display() passthrough
+  BrowseV2:
+    converter: src.tools.builtin.BrowseConverter
+    support: full
+    spark_equivalent: display() passthrough
+  Comment:
+    converter: src.tools.builtin.PassthroughConverter
+    support: passthrough
+    spark_equivalent: (annotation only)
+  BlockUntilDone:
+    converter: src.tools.builtin.PassthroughConverter
+    support: passthrough
+    spark_equivalent: (execution ordering handled by cell order)
+  RunCommand:
+    converter: src.tools.builtin.PassthroughConverter
+    support: passthrough
+    spark_equivalent: (review manually — external command)
+  # LockIn* (In-DB) variants reuse the standard converters
+  LockInStreamIn:
+    converter: src.tools.builtin.InputDataConverter
+    support: full
+    spark_equivalent: spark.table()
+  LockInStreamOut:
+    converter: src.tools.builtin.OutputDataConverter
+    support: full
+    spark_equivalent: df.write.format("delta")
+  LockInFilter:
+    converter: src.tools.builtin.FilterConverter
+    support: full
+    spark_equivalent: df.filter()
+  LockInSelect:
+    converter: src.tools.builtin.SelectConverter
+    support: full
+    spark_equivalent: drop / rename / cast
+  LockInJoin:
+    converter: src.tools.builtin.JoinConverter
+    support: full
+    spark_equivalent: df.join()
+  LockInFormula:
+    converter: src.tools.builtin.FormulaConverter
+    support: full
+    spark_equivalent: df.withColumn()
+
+# Optimization rules applied by the self-correction loop on WARNING.
+optimizations:
+  broadcast_small_joins: true          # F.broadcast() when one side is inline TextInput
+  prefer_delta_writes: true            # rewrite CSV writes to Delta
+  zorder_hint: true                    # append OPTIMIZE ... ZORDER guidance
+  unity_catalog_three_level_names: true

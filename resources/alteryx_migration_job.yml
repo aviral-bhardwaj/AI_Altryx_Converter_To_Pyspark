@@ -1,0 +1,75 @@
+# Databricks Workflow: batch Alteryx migration pipeline.
+#
+# Orchestrates the conversion as a multi-task job:
+#   1. convert_workflows  — batch-convert every .yxmd in var.input_dir
+#                           (parse → generate → self-correct → export)
+#   2. validate_outputs   — re-run structural validation over the generated
+#                           notebooks and fail the job on any FAIL status
+#
+# Run:  databricks bundle run alteryx_migration_job -t dev
+
+resources:
+  jobs:
+    alteryx_migration_job:
+      name: "Alteryx → Databricks Migration (${bundle.target})"
+      description: >-
+        Converts Alteryx .yxmd workflows into validated PySpark notebooks
+        using the Skill Mode converter, then gates on the self-correction
+        validation report.
+
+      job_clusters:
+        - job_cluster_key: converter_cluster
+          new_cluster:
+            spark_version: ${var.spark_version}
+            node_type_id: ${var.node_type_id}
+            num_workers: 0
+            spark_conf:
+              spark.databricks.cluster.profile: singleNode
+              spark.master: "local[*]"
+            custom_tags:
+              ResourceClass: SingleNode
+              project: alteryx-to-databricks-converter
+
+      parameters:
+        - name: input_dir
+          default: ${var.input_dir}
+        - name: output_dir
+          default: ${var.output_dir}
+        - name: target_catalog
+          default: ${var.target_catalog}
+        - name: target_schema
+          default: ${var.target_schema}
+
+      tasks:
+        - task_key: convert_workflows
+          job_cluster_key: converter_cluster
+          notebook_task:
+            notebook_path: ../notebooks/01_Skill_Mode_Alteryx_to_Databricks.ipynb
+            base_parameters:
+              batch_mode: "true"
+              input_dir: "{{job.parameters.input_dir}}"
+              output_dir: "{{job.parameters.output_dir}}"
+              target_catalog: "{{job.parameters.target_catalog}}"
+              target_schema: "{{job.parameters.target_schema}}"
+              output_format: "ipynb,py"
+              max_iterations: "3"
+              run_sample_validation: "true"
+
+        - task_key: validate_outputs
+          depends_on:
+            - task_key: convert_workflows
+          job_cluster_key: converter_cluster
+          spark_python_task:
+            python_file: ../src/job_validate.py
+            parameters:
+              - "{{job.parameters.output_dir}}"
+
+      # Uncomment to receive failure notifications (set var.notification_email):
+      # email_notifications:
+      #   on_failure:
+      #     - ${var.notification_email}
+
+      max_concurrent_runs: 1
+      timeout_seconds: 7200
+      tags:
+        project: alteryx-to-databricks-converter

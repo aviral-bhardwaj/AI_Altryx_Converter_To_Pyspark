@@ -1,0 +1,75 @@
+# ═══════════════════════════════════════════════════════════════════
+# Databricks Marketplace listing metadata
+# ═══════════════════════════════════════════════════════════════════
+# The Marketplace Provider Console is form-driven; this file is the single
+# source of truth you copy values from when creating/updating the listing.
+# See marketplace/PUBLISHING.md for the end-to-end publishing runbook.
+
+listing:
+  title: "Alteryx to Databricks Accelerator (Skill Mode)"
+  subtitle: >-
+    Convert Alteryx .yxmd workflows into validated, production-ready PySpark
+    notebooks — with a self-correcting validation loop and Asset Bundle deploy.
+  listing_type: solution_accelerator      # notebook-based listing
+  provider_name: "<your provider profile name>"
+  categories:
+    - Data Engineering
+    - Migrations
+    - Developer Tools
+  industries:
+    - Cross-Industry
+
+  description: |
+    ## What it does
+    The Alteryx to Databricks Accelerator migrates Alteryx Designer workflows
+    (.yxmd) to Databricks in minutes, not weeks:
+
+    - **One Skill Mode notebook** drives the entire journey: upload a .yxmd
+      (or a folder of them), visualize the workflow DAG, convert, validate,
+      and export Databricks-ready notebooks (.ipynb / .py / .dbc).
+    - **Self-correcting validation loop** — generated PySpark is parsed with
+      Python's AST and compared against the original Alteryx DAG (tool
+      coverage, join keys, filter fields, syntax). Failures trigger a strict
+      granular re-parse and regeneration (up to 3 iterations); warnings apply
+      Databricks optimizations (broadcast joins, Delta writes, ZORDER hints).
+      Every exported notebook carries its validation report as the first cell.
+    - **35+ Alteryx tools supported** out of the box (Input/Output, Join,
+      Union, Filter, Formula with full expression translation, Summarize,
+      CrossTab, Transpose, Multi-Row Formula, RegEx, and more) via a
+      plugin registry — add your own tools without touching core code.
+    - **Databricks-native output**: Delta Lake writes, Unity Catalog
+      three-level names, display() previews, %md documentation per step.
+    - **Asset Bundle included**: deploy the converter and a batch migration
+      job to any workspace with `databricks bundle deploy` (dev/staging/prod
+      targets) or run CI/CD via the bundled GitHub Actions workflow.
+
+    ## Requirements
+    - Databricks Runtime 13.3 LTS or newer (or local PySpark 3.4+, Python 3.9+)
+    - Unity Catalog recommended for output tables
+
+    ## Getting started
+    1. Get instant access and clone the repo / import the bundle.
+    2. Open notebooks/01_Skill_Mode_Alteryx_to_Databricks.ipynb.
+    3. Point the yxmd_path widget at your workflow and Run All.
+
+  documentation_url: "https://github.com/aviral-bhardwaj/Altryx-Accelerator#readme"
+  support_contact: "ardb40@gmail.com"
+  terms_of_service: "MIT License — see LICENSE in the repository."
+  privacy_policy_url: ""                  # required by the provider profile
+
+  access:
+    type: instantly_available             # free, no provider approval gate
+    audience: public
+
+  assets:
+    # Notebook-based listings attach the accelerator notebooks directly.
+    notebooks:
+      - notebooks/01_Skill_Mode_Alteryx_to_Databricks.ipynb
+    # Optional: attach sample outputs generated from tests/sample_workflows.
+    git_repo: "https://github.com/aviral-bhardwaj/Altryx-Accelerator"
+
+  media:
+    icon: marketplace/assets/icon.png     # 512x512 PNG (add before submission)
+    screenshots:
+      - marketplace/assets/screenshot_dag.png
+      - marketplace/assets/screenshot_validation.png
