@@ -51,16 +51,39 @@ jobs:
     name: Bundle validate
     runs-on: ubuntu-latest
     needs: test
+    env:
+      DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+      DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
       - uses: databricks/setup-cli@main
 
+      # `bundle validate` authenticates against the workspace (it resolves the
+      # current user for dev-mode paths), so it can only run once the
+      # DATABRICKS_HOST / DATABRICKS_TOKEN repository secrets are configured.
       - name: databricks bundle validate
+        if: env.DATABRICKS_HOST != ''
         run: databricks bundle validate -t dev
-        env:
-          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
-          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+
+      - name: Offline bundle checks (no workspace secrets configured)
+        if: env.DATABRICKS_HOST == ''
+        run: |
+          echo "::notice::DATABRICKS_HOST/DATABRICKS_TOKEN secrets not set — running offline checks only."
+          echo "::notice::Add the secrets in Settings → Secrets and variables → Actions to enable full 'databricks bundle validate'."
+          python - <<'EOF'
+          import sys, yaml
+          for f in ("databricks.yml", "resources/alteryx_migration_job.yml", "config/tool_mapping.yaml"):
+              data = yaml.safe_load(open(f))
+              assert data, f"{f} is empty"
+              print(f"OK  {f}")
+          bundle = yaml.safe_load(open("databricks.yml"))
+          assert bundle["bundle"]["name"] == "alteryx-to-databricks-converter"
+          assert set(bundle["targets"]) >= {"dev", "staging", "prod"}, "missing bundle targets"
+          job = yaml.safe_load(open("resources/alteryx_migration_job.yml"))
+          assert "alteryx_migration_job" in job["resources"]["jobs"]
+          print("Offline bundle structure checks passed.")
+          EOF
 
   deploy:
     name: Deploy bundle
@@ -69,16 +92,21 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     concurrency: bundle-deploy-${{ github.event.inputs.target || 'dev' }}
     environment: ${{ github.event.inputs.target || 'dev' }}
+    env:
+      DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+      DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
       - uses: databricks/setup-cli@main
 
       - name: databricks bundle deploy
+        if: env.DATABRICKS_HOST != ''
         run: |
           TARGET="${{ github.event.inputs.target || 'dev' }}"
           databricks bundle validate -t "$TARGET"
           databricks bundle deploy  -t "$TARGET"
-        env:
-          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
-          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+
+      - name: Deploy skipped (no workspace secrets configured)
+        if: env.DATABRICKS_HOST == ''
+        run: echo "::notice::Deploy skipped — set DATABRICKS_HOST/DATABRICKS_TOKEN secrets to enable bundle deployment."

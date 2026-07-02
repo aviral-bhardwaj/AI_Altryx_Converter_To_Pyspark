@@ -3,7 +3,8 @@
 Convert Alteryx Designer workflows (`.yxmd`) into **validated, production-ready
 PySpark notebooks** — driven by **one** Skill Mode notebook, packaged as a
 **Databricks Asset Bundle**, and guarded by a **self-correcting validation loop**
-that checks every generated notebook against the original Alteryx DAG.
+that checks every generated notebook against the original Alteryx DAG **and can
+execute it on sample data to verify row counts and schemas**.
 
 [![Bundle Validate & Deploy](https://github.com/aviral-bhardwaj/Altryx-Accelerator/actions/workflows/bundle-deploy.yml/badge.svg)](https://github.com/aviral-bhardwaj/Altryx-Accelerator/actions/workflows/bundle-deploy.yml)
 ![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)
@@ -62,53 +63,148 @@ Altryx-Accelerator/
 │   └── PUBLISHING.md
 ├── tests/
 │   ├── sample_workflows/            # 4 end-to-end .yxmd samples
-│   └── test_*.py                    # 271 tests
+│   └── test_*.py                    # 278 tests incl. Spark data-level e2e
 └── .github/workflows/
     └── bundle-deploy.yml            # CI: pytest + bundle validate + deploy
 ```
 
 ---
 
-## Quickstart on Databricks
+## 📖 How to use — step by step
 
-1. **Get the code** — either:
-   - **Git folder** (recommended): *Workspace → Create → Git folder* →
-     `https://github.com/aviral-bhardwaj/Altryx-Accelerator`, or
-   - **Bundle deploy** from your laptop:
-     ```bash
-     databricks bundle validate
-     databricks bundle deploy -t dev
-     ```
-2. Open **`notebooks/01_Skill_Mode_Alteryx_to_Databricks.ipynb`** on a
-   DBR 13.3+ cluster.
-3. Set the widgets — `yxmd_path` (or `batch_mode` + `input_dir`),
-   `target_catalog`, `target_schema` — and **Run All**.
-4. Collect the converted notebooks (with their embedded validation reports)
-   from the `output_dir`, or let the bundled **`alteryx_migration_job`** run
-   the whole batch as a Databricks Workflow:
-   ```bash
-   databricks bundle run alteryx_migration_job -t dev
-   ```
+### Option A — On Databricks (recommended)
 
-The notebook works out of the box against the bundled samples in
-`tests/sample_workflows/` — no external data required.
+**Step 1 — Get the code into your workspace.** Either:
 
-### Quickstart locally
+- **Git folder** (simplest): *Workspace → Create → Git folder* → paste
+  `https://github.com/aviral-bhardwaj/Altryx-Accelerator` → Create; **or**
+- **Bundle deploy** from your laptop (requires the
+  [Databricks CLI](https://docs.databricks.com/dev-tools/cli/install.html) ≥ 0.218):
+  ```bash
+  git clone https://github.com/aviral-bhardwaj/Altryx-Accelerator
+  cd Altryx-Accelerator
+  databricks auth login --host https://<your-workspace-url>
+  databricks bundle validate          # must pass before every deploy
+  databricks bundle deploy -t dev
+  ```
+
+**Step 2 — Upload your `.yxmd` file(s).** Any of:
+- *Workspace → your Git folder → Upload* (file lands next to the notebook),
+- a Unity Catalog **Volume** (`/Volumes/<catalog>/<schema>/<volume>/my_flow.yxmd`),
+- or skip uploading and **paste the workflow XML** directly into the notebook
+  (Section 2, `PASTED_XML` variable — open your `.yxmd` in a text editor, copy all).
+
+**Step 3 — Open the notebook** `notebooks/01_Skill_Mode_Alteryx_to_Databricks.ipynb`
+and attach a cluster with **Databricks Runtime 13.3 LTS or newer**.
+
+**Step 4 — Fill in the widgets** (top of the notebook after running cell 1–2):
+
+| Widget | What it does | Default |
+|---|---|---|
+| `yxmd_path` | Path to a single `.yxmd` file | bundled sample |
+| `batch_mode` | `true` = convert every `.yxmd` under `input_dir` | `false` |
+| `input_dir` | Folder of `.yxmd` files for batch mode | `tests/sample_workflows` |
+| `output_dir` | Where converted notebooks are written | `<repo>/output` |
+| `output_format` | Any of `ipynb`, `py`, `dbc` (comma-separated) | `ipynb,py` |
+| `target_catalog` / `target_schema` | Unity Catalog target for output tables | `main` / `alteryx_migrated` |
+| `max_iterations` | Self-correction budget (1–3) | `3` |
+| `run_sample_validation` | Execute generated code on this cluster and report rows/schemas | `false` |
+| `debug_mode` | Print per-tool conversion status + schemas | `false` |
+| `bundle_target` | Bundle target used by Section 8 commands | `dev` |
+
+**Step 5 — Run All.** The notebook walks through 9 sections:
+1. installs `lxml`, `pyyaml`, `nbformat` and wires up `src/`,
+2. resolves your input (file / pasted XML / batch folder),
+3. **shows the parsed workflow DAG** (tool table with connections) — check it
+   matches what you see on the Alteryx canvas,
+4. loads `config/tool_mapping.yaml` + your source-table mappings,
+5. converts every tool in DAG order,
+6. **runs the self-correction loop** and shows a per-iteration progress table,
+7. exports `.ipynb`/`.py`/`.dbc` + `conversion_summary.json` to `output_dir`,
+8. prints the exact `databricks bundle` commands to deploy,
+9. (optional) executes the generated code on your cluster and prints
+   row counts + schemas per DataFrame.
+
+**Step 6 — Map your data sources (first real run).** Alteryx inputs that point
+at local files (`C:\...\*.yxdb`, Excel, etc.) can't be read by Spark. The
+generated notebook marks each one:
+
+```python
+# Tool 12: InputData — local Alteryx source, needs a Unity Catalog mapping
+# TODO: map via source-tables config. Original source: C:/Users/.../Channel.yxdb
+df_channel = spark.table("TODO.channel")
+```
+
+Create `config/source_tables.json` mapping tool IDs / annotations / path
+substrings to real tables, then re-run:
+
+```json
+{
+  "12": "main.bronze.channel",
+  "transactions": "main.sales.transactions"
+}
+```
+
+(CSV/Parquet paths and `catalog.schema.table` references convert automatically.)
+
+**Step 7 — Open the converted notebook** from `output_dir`. The **first cell is
+the validation report**: PASS/WARNING/FAIL, iterations used, and an itemized
+list of anything needing review (unsupported tools, TODOs, optimizations
+applied). Uncomment the `df.write.format("delta")...` line in the Output
+section when you're ready to actually write tables — writes ship commented so
+nothing touches your catalog until you say so.
+
+**Step 8 (optional) — Run conversions as a scheduled Databricks Workflow:**
+
+```bash
+databricks bundle run alteryx_migration_job -t dev
+```
+
+This runs batch conversion + a validation gate that fails the job if any
+workflow finished in FAIL state (`src/job_validate.py`).
+
+### Option B — Local CLI
 
 ```bash
 git clone https://github.com/aviral-bhardwaj/Altryx-Accelerator && cd Altryx-Accelerator
 pip install -r requirements.txt
 
-# single workflow, self-correcting, Jupyter + Databricks source output
+# 1) single workflow → self-corrected .ipynb + .py with embedded report
 python convert.py "my_workflow.yxmd" --self-correct --format ipynb,py
 
-# whole folder in batch mode
+# 2) whole folder, mirrored output structure + batch_summary.json
 python convert.py ./workflows --batch --self-correct --format ipynb
+
+# 3) inspect a workflow without converting
+python convert.py "my_workflow.yxmd" --dry-run
+
+# 4) map Alteryx inputs to Unity Catalog tables
+python convert.py "my_workflow.yxmd" --self-correct \
+    --source-tables-config config/source_tables.json
+
+# 5) optional AI-assisted mode for gnarly workflows (needs ANTHROPIC_API_KEY)
+python convert.py "my_workflow.yxmd" --mode ai
 ```
+
+Then import the generated `.ipynb` into Databricks (*Workspace → Import*) or
+commit it to a Git folder. To also **execute** the generated code locally,
+`pip install pyspark` — the same validation the notebook runs in Section 9 is
+available via `pytest tests/test_e2e_spark.py`.
+
+### Option C — CI/CD (GitHub Actions)
+
+1. In the repo: *Settings → Secrets and variables → Actions* → add
+   `DATABRICKS_HOST` (e.g. `https://adb-123....azuredatabricks.net`) and
+   `DATABRICKS_TOKEN`.
+2. Every push/PR runs the 278-test suite, an end-to-end sample conversion, and
+   `databricks bundle validate`. Without secrets, CI still passes using offline
+   structural checks and prints a notice.
+3. Pushes to `main` (or *Actions → Bundle Validate & Deploy → Run workflow*)
+   deploy the bundle to the chosen target (`dev`/`staging`/`prod`).
 
 ---
 
-## The self-correcting validation loop
+## What "correct result" means — the self-correcting validation loop
 
 Every conversion runs through `src/self_correction.py`:
 
@@ -118,11 +214,11 @@ Every conversion runs through `src/self_correction.py`:
 2. **Validate** — the generated code is parsed with Python's `ast` module and
    compared against the `.yxmd` DAG:
    - every tool has its expected operation (`Join → .join()`,
-     `Summarize → .groupBy().agg()`, …)
+     `Summarize → .groupBy().agg()`, `Filter → .filter()`, …)
    - join keys and filter fields from the XML appear in the code
    - no unresolved DataFrame references, no syntax errors
-   - optionally, the code is **executed against sample data** on your cluster
-     and row counts/schemas are compared.
+   - with `run_sample_validation`, the code is **executed on your cluster**
+     and per-DataFrame row counts + schemas are reported.
 3. **Correct**
    - **FAILED** → regenerate in *strict mode*: each tool's raw
      `<Configuration>` XML is re-parsed granularly and unsupported tools get
@@ -133,9 +229,14 @@ Every conversion runs through `src/self_correction.py`:
 4. **Repeat** up to **3 iterations**. If still failing, the best attempt is
    exported with a detailed error report.
 
-The full report (status, iterations, mismatches) is embedded as the **first
-`%md` cell** of every exported notebook, and the migration job's
-`validate_outputs` task fails the run if any workflow finished in FAIL state.
+The report is embedded as the **first `%md` cell** of every exported notebook.
+
+**Verified end-to-end**: the test suite doesn't just check structure — it
+executes the generated notebooks on a real Spark session and asserts the
+output **data values** match hand-computed Alteryx semantics (filter True/False
+ports, join with key dedup, groupBy aggregations, `IF/ELSEIF/IIF` formulas,
+`Trim`/`UPPERCASE` functions, type casts, unions). See
+[`tests/test_e2e_spark.py`](tests/test_e2e_spark.py).
 
 ---
 
@@ -159,11 +260,6 @@ databricks bundle run alteryx_migration_job -t dev
 No hostnames are hardcoded — authentication comes from your CLI profile or
 `DATABRICKS_HOST`/`DATABRICKS_TOKEN`. Override knobs at deploy time, e.g.
 `--var="target_catalog=prod_catalog"`.
-
-**CI/CD**: `.github/workflows/bundle-deploy.yml` runs the 271-test suite, an
-end-to-end sample conversion, and `databricks bundle validate` on every push;
-pushes to `main` (or manual dispatch) deploy the bundle. Set the
-`DATABRICKS_HOST` and `DATABRICKS_TOKEN` repo secrets to enable it.
 
 ---
 
@@ -203,6 +299,19 @@ the structural validator picks up expectations from
 
 ---
 
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `spark.table("TODO....")` in output | Alteryx input points at a local file (`.yxdb`, Windows path) | Map it in `config/source_tables.json` (Step 6 above) |
+| Report says *UNSUPPORTED TOOL* | Tool has no registered converter | Data passes through unchanged; add a plugin (section above) or convert that step manually |
+| Status `WARNING` with TODO items | Tool converted partially (e.g. TextToColumns delimiter) | Open the flagged cell — the original Alteryx config is in the comment |
+| Status `FAIL` after 3 iterations | Structural mismatch the engine couldn't fix | The report's *Unresolved mismatches* section lists each issue with tool IDs |
+| CI "Bundle validate" fails: `cannot configure default credentials` | `DATABRICKS_HOST`/`DATABRICKS_TOKEN` secrets not set | Add them in *Settings → Secrets* (CI passes with offline checks until then) |
+| Output tables not created | Intentional: writes are commented out | Uncomment the `df.write...saveAsTable(...)` line after reviewing the notebook |
+
+---
+
 ## Databricks Marketplace
 
 This repo ships marketplace-ready: MIT license, versioned packaging,
@@ -229,15 +338,12 @@ matrix with support levels lives in
 break a conversion — they are passed through with a clearly flagged fallback
 message and land in the validation report.
 
-There is also an **optional AI mode** (`python convert.py … --mode ai`,
-requires `ANTHROPIC_API_KEY`) that uses Claude for gnarly workflows the
-deterministic engine flags as partial.
-
 ## Development
 
 ```bash
 pip install -r requirements.txt
-pytest tests/ -q          # 271 tests
+pytest tests/ -q                        # 273 tests (fast, no Spark needed)
+pip install pyspark && pytest tests/ -q # 278 tests incl. data-level Spark e2e
 python convert.py tests/sample_workflows --batch --self-correct --format ipynb,py
 ```
 

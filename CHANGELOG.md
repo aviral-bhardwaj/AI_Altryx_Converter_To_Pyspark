@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.0.1] — 2026-07-02
+
+### Added
+- Data-level end-to-end tests (`tests/test_e2e_spark.py`): generated notebooks
+  are executed on a real Spark session and output values are asserted against
+  hand-computed Alteryx semantics (filter True/False ports, join key dedup,
+  aggregations, IF/ELSEIF/IIF formulas, string functions, casts, unions).
+- Notebook "Run All" test (`tests/test_notebook_runall.py`): executes every
+  code cell of the Skill Mode notebook and verifies exported artifacts.
+- README: full step-by-step usage guide (Databricks UI, local CLI, CI/CD),
+  source-table mapping walkthrough, and troubleshooting table.
+
+### Fixed
+- CI "Bundle validate" job no longer fails when `DATABRICKS_HOST`/
+  `DATABRICKS_TOKEN` secrets are missing — it falls back to offline bundle
+  structure checks with a clear notice; full `databricks bundle validate`
+  runs automatically once secrets are configured.
+
 ## [1.0.0] — 2026-07-02
 
 ### Added — "Skill Mode" release
