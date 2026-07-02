@@ -57,6 +57,7 @@ class SelfCorrectionResult:
     structural_report: Optional[StructuralReport] = None
     iterations: list = field(default_factory=list)
     runtime_result: Optional[dict] = None
+    max_iterations: int = MAX_ITERATIONS_DEFAULT
 
     @property
     def code(self) -> str:
@@ -73,7 +74,7 @@ class SelfCorrectionResult:
             f"({self.conversion.complexity} complexity, "
             f"{self.conversion.num_joins} joins, {self.conversion.num_formulas} formulas)",
             f"- **Self-correction iterations used:** {len(self.iterations)} "
-            f"of {MAX_ITERATIONS_DEFAULT}",
+            f"of {self.max_iterations}",
             "",
             "| Iteration | Mode | Result | Failures | Warnings | Action taken |",
             "|---|---|---|---|---|---|",
@@ -196,15 +197,26 @@ class SelfCorrectingConverter:
                 break
 
             if status == "WARNING":
-                it.action = "applied optimization rules (broadcast/Delta/ZORDER)"
-                iterations.append(it)
-                self._notify(progress_callback, i, status, it.action)
                 optimized_code = self.apply_optimizations(result.code, report, context)
-                # Re-validate: optimizations must not break the structure.
+                # Re-validate: optimizations must not break the structure...
                 re_report = self.validator.validate(optimized_code, workflow, context)
-                if not re_report.failures:
+                accepted = not re_report.failures
+                # ...and must still execute cleanly on sample data when available.
+                if accepted and spark is not None:
+                    optimized_runtime = run_generated_code(optimized_code, spark)
+                    if optimized_runtime["ok"]:
+                        runtime_result = optimized_runtime
+                    else:
+                        accepted = False
+                if accepted:
                     result.code = optimized_code
                     report = re_report
+                    it.action = "applied optimization rules (broadcast/Delta/ZORDER)"
+                else:
+                    it.action = ("optimization rules rejected by re-validation — "
+                                 "kept the unoptimized code")
+                iterations.append(it)
+                self._notify(progress_callback, i, status, it.action)
                 best = (len(report.failures), result, report, runtime_result)
                 break
 
@@ -230,6 +242,7 @@ class SelfCorrectingConverter:
             structural_report=report,
             iterations=iterations,
             runtime_result=runtime_result,
+            max_iterations=self.max_iterations,
         )
 
     # ── optimization rules (WARNING remediation) ──────────────────────
@@ -252,9 +265,12 @@ class SelfCorrectingConverter:
                     f".join({var},", f".join(F.broadcast({var}),")
 
         if any("Delta" in m for m in messages):
+            # Keep the call syntactically intact — the original path stays as
+            # the .save() argument. (An inline comment here would swallow the
+            # closing parenthesis and break the generated code.)
             optimized = optimized.replace(
                 ".write.csv(",
-                '.write.format("delta").mode("overwrite").save(  # optimized from CSV: ',
+                '.write.format("delta").mode("overwrite").save(',
             )
 
         if 'saveAsTable("' in optimized and "ZORDER" not in optimized:

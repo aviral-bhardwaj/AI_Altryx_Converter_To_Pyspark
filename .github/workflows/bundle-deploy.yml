@@ -27,6 +27,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-python@v5
         with:
@@ -56,6 +58,8 @@ jobs:
       DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: databricks/setup-cli@main
 
@@ -97,13 +101,17 @@ jobs:
       DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: databricks/setup-cli@main
 
       - name: databricks bundle deploy
         if: env.DATABRICKS_HOST != ''
+        env:
+          TARGET_INPUT: ${{ github.event.inputs.target || 'dev' }}
         run: |
-          TARGET="${{ github.event.inputs.target || 'dev' }}"
+          TARGET="$TARGET_INPUT"
           databricks bundle validate -t "$TARGET"
           databricks bundle deploy  -t "$TARGET"
 

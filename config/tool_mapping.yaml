@@ -59,7 +59,7 @@ tools:
   Summarize:
     converter: src.tools.builtin.SummarizeConverter
     support: full
-    spark_equivalent: groupBy().agg()
+    spark_equivalent: groupBy().agg()  # First/Last actions are flagged with a TODO (order-dependent in Spark)
   Sort:
     converter: src.tools.builtin.SortConverter
     support: full

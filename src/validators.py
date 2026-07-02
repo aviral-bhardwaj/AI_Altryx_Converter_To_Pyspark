@@ -651,10 +651,12 @@ class ReconciliationReporter:
                 f'{status.value}</span>'
             )
 
+        from html import escape as _esc
+
         html = []
         html.append("<!DOCTYPE html>")
         html.append('<html><head><meta charset="utf-8">')
-        html.append(f"<title>Validation Report - {report.workflow_name}</title>")
+        html.append(f"<title>Validation Report - {_esc(str(report.workflow_name))}</title>")
         html.append("<style>")
         html.append("body { font-family: -apple-system, sans-serif; max-width: 900px; margin: 40px auto; padding: 0 20px; }")
         html.append("h1, h2, h3 { color: #333; }")
@@ -665,20 +667,20 @@ class ReconciliationReporter:
         html.append(".pass { color: #28a745; } .fail { color: #dc3545; } .warning { color: #ffc107; }")
         html.append("</style></head><body>")
 
-        html.append(f"<h1>Validation Report: {report.workflow_name}</h1>")
-        html.append(f"<p>Generated: {report.timestamp}</p>")
+        html.append(f"<h1>Validation Report: {_esc(str(report.workflow_name))}</h1>")
+        html.append(f"<p>Generated: {_esc(str(report.timestamp))}</p>")
         html.append(f"<h2>Overall Status: {badge(report.status)}</h2>")
 
         # Schema section
         html.append(f"<h3>Schema Validation {badge(report.schema_status)}</h3>")
         if report.missing_columns:
-            html.append(f"<p><strong>Missing columns:</strong> {', '.join(report.missing_columns)}</p>")
+            html.append(f"<p><strong>Missing columns:</strong> {_esc(', '.join(report.missing_columns))}</p>")
         if report.extra_columns:
-            html.append(f"<p><strong>Extra columns:</strong> {', '.join(report.extra_columns)}</p>")
+            html.append(f"<p><strong>Extra columns:</strong> {_esc(', '.join(report.extra_columns))}</p>")
         if report.type_mismatches:
             html.append("<table><tr><th>Column</th><th>Source Type</th><th>Target Type</th></tr>")
             for tc in report.type_mismatches:
-                html.append(f"<tr><td>{tc.column_name}</td><td>{tc.source_type}</td><td>{tc.target_type}</td></tr>")
+                html.append(f"<tr><td>{_esc(str(tc.column_name))}</td><td>{_esc(str(tc.source_type))}</td><td>{_esc(str(tc.target_type))}</td></tr>")
             html.append("</table>")
 
         # Row count section
@@ -692,8 +694,8 @@ class ReconciliationReporter:
         if report.sample_mismatches:
             html.append("<table><tr><th>Row</th><th>Column</th><th>Source</th><th>Target</th></tr>")
             for m in report.sample_mismatches[:20]:
-                html.append(f"<tr><td>{m.row_index}</td><td>{m.column_name}</td>"
-                            f"<td>{m.source_value}</td><td>{m.target_value}</td></tr>")
+                html.append(f"<tr><td>{m.row_index}</td><td>{_esc(str(m.column_name))}</td>"
+                            f"<td>{_esc(str(m.source_value))}</td><td>{_esc(str(m.target_value))}</td></tr>")
             html.append("</table>")
 
         # Aggregate section
@@ -703,8 +705,8 @@ class ReconciliationReporter:
             for c in report.aggregate_comparisons:
                 match_cls = "pass" if c.match else "fail"
                 html.append(
-                    f'<tr><td>{c.column_name}</td><td>{c.metric}</td>'
-                    f'<td>{c.source_value}</td><td>{c.target_value}</td>'
+                    f'<tr><td>{_esc(str(c.column_name))}</td><td>{_esc(str(c.metric))}</td>'
+                    f'<td>{_esc(str(c.source_value))}</td><td>{_esc(str(c.target_value))}</td>'
                     f'<td class="{match_cls}">{"PASS" if c.match else "FAIL"}</td></tr>'
                 )
             html.append("</table>")
@@ -713,7 +715,7 @@ class ReconciliationReporter:
         html.append("<h3>Recommendations</h3>")
         html.append("<ul>")
         for rec in report.recommendations:
-            html.append(f"<li>{rec}</li>")
+            html.append(f"<li>{_esc(str(rec))}</li>")
         html.append("</ul>")
 
         html.append("</body></html>")
@@ -1140,6 +1142,12 @@ def run_generated_code(code: str, spark, extra_globals: Optional[dict] = None) -
     Execute generated PySpark against a live Spark session (sample-data
     validation). Returns {"ok": bool, "error": str, "dataframes": {name: {rows, columns}}}.
 
+    SECURITY: this exec()s code derived from the input .yxmd with full driver
+    privileges. It never runs implicitly — a caller must opt in by passing a
+    Spark session (CLI never does; the notebook gates it behind the
+    run_sample_validation widget). Only enable it for workflows you trust, and
+    prefer a disposable cluster/sandbox for third-party files.
+
     Only DataFrame-producing assignments are inspected; write operations in
     generated notebooks are commented out by default so this is side-effect free.
     """
@@ -1168,5 +1176,6 @@ def run_generated_code(code: str, spark, extra_globals: Optional[dict] = None) -
                 }
             except Exception as exc:
                 result["ok"] = False
-                result["error"] = f"DataFrame '{name}' failed to evaluate: {exc}"
+                if not result["error"]:  # keep the FIRST failure, not the last
+                    result["error"] = f"DataFrame '{name}' failed to evaluate: {exc}"
     return result

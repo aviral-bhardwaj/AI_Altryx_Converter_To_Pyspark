@@ -181,3 +181,126 @@ class TestExporter:
         by_name = {s["workflow"]: s for s in summaries}
         for name in SAMPLES:
             assert by_name[name]["status"] in ("PASS", "WARNING")
+
+    def test_dbc_contains_validation_report(self, parsed, sample_workflow_file, tmp_path):
+        """Regression: the .dbc export must embed the report like ipynb/py do."""
+        import io
+        import zipfile
+        result = SelfCorrectingConverter().convert(parsed, sample_workflow_file.stem)
+        written = DatabricksExporter(str(tmp_path)).export(result, formats=("dbc",))
+        with zipfile.ZipFile(io.BytesIO(Path(written["dbc"]).read_bytes())) as zf:
+            payload = json.loads(zf.read(zf.namelist()[0]))
+        first_command = payload["commands"][0]["command"]
+        assert first_command.startswith("%md")
+        assert "Conversion Validation Report" in first_command
+
+
+# ── Copilot-review regression fixes ────────────────────────────────
+
+class TestReviewRegressions:
+    def test_report_markdown_uses_configured_max_iterations(self, parsed, sample_workflow_file):
+        converter = SelfCorrectingConverter(max_iterations=2)
+        result = converter.convert(parsed, sample_workflow_file.stem)
+        assert "of 2" in result.report_markdown()
+
+    def test_csv_to_delta_optimization_stays_parseable(self):
+        """Regression: the Delta rewrite must not swallow the closing paren."""
+        import ast
+        from src.self_correction import SelfCorrectingConverter
+        from src.validators import StructuralIssue, StructuralReport
+
+        code = 'df_1 = spark.table("a.b.c")\ndf_1.write.csv("/tmp/out.csv", header=True)\n'
+        report = StructuralReport()
+        report.issues.append(StructuralIssue("WARNING", None, "OutputData",
+                                             "consider Delta Lake format"))
+        optimized = SelfCorrectingConverter().apply_optimizations(code, report, {"tools": []})
+        ast.parse(optimized)
+        assert '.write.format("delta")' in optimized
+
+    def test_var_name_collision_dedupe(self):
+        """Regression: identical annotations must not share one variable."""
+        from src.models import Container, Tool, Workflow
+        from src.tools import GeneratorContext
+
+        t1 = Tool(1, "", "Formula", {}, "", "Clean Data")
+        t2 = Tool(2, "", "Formula", {}, "", "Clean Data")
+        wf = Workflow(containers=[], all_containers={}, all_tools={1: t1, 2: t2},
+                      connections=[], text_inputs={})
+        ctx = GeneratorContext(wf, [t1, t2], [])
+        name1 = ctx.make_var_name(t1)
+        name2 = ctx.make_var_name(t2)
+        assert name1 == "df_clean_data"
+        assert name2 != name1
+
+    def test_output_temp_view_uses_file_stem(self):
+        """Regression: 'output.csv' must give view 'output', not 'csv'."""
+        from src.tools.builtin import _table_leaf_name
+        assert _table_leaf_name("output.csv") == "output"
+        assert _table_leaf_name("path/to/book.xlsx") == "book"
+        assert _table_leaf_name("catalog.schema.table") == "table"
+        assert _table_leaf_name("bare_table") == "bare_table"
+
+    def test_output_table_qualified_with_target_catalog(self, parsed):
+        """Bare output table names get catalog.schema qualification."""
+        from src.models import Tool, Workflow
+        from src.tools import GeneratorContext
+        from src.tools.builtin import OutputDataConverter
+
+        tool = Tool(9, "", "OutputData", {}, "", "", parsed_config={"table_name": "results"})
+        wf = Workflow(containers=[], all_containers={}, all_tools={9: tool},
+                      connections=[], text_inputs={})
+        ctx = GeneratorContext(wf, [tool], [], target_catalog="main",
+                               target_schema="alteryx_migrated")
+        lines = OutputDataConverter().convert(tool, ctx)
+        joined = "\n".join(lines)
+        assert "main.alteryx_migrated.results" in joined
+        # Already-qualified and file targets stay untouched.
+        tool2 = Tool(10, "", "OutputData", {}, "", "",
+                     parsed_config={"table_name": "cat.sch.tbl"})
+        ctx2 = GeneratorContext(wf, [tool2], [], target_catalog="main",
+                                target_schema="alteryx_migrated")
+        assert "cat.sch.tbl" in "\n".join(OutputDataConverter().convert(tool2, ctx2))
+
+    def test_summarize_first_last_flagged_order_dependent(self):
+        from src.models import Tool, Workflow
+        from src.tools import GeneratorContext
+        from src.tools.builtin import SummarizeConverter
+
+        tool = Tool(3, "", "Summarize", {}, "", "", parsed_config={
+            "summarize_fields": [
+                {"field": "Region", "action": "GroupBy", "rename": ""},
+                {"field": "Amount", "action": "First", "rename": "first_amount"},
+            ]})
+        wf = Workflow(containers=[], all_containers={}, all_tools={3: tool},
+                      connections=[], text_inputs={})
+        lines = SummarizeConverter().convert(tool, GeneratorContext(wf, [tool], []))
+        assert any("order-dependent" in line for line in lines)
+
+    def test_html_report_escapes_untrusted_values(self):
+        from src.validators import ReconciliationReporter, ValidationReport
+
+        report = ValidationReport(workflow_name="<script>alert(1)</script>")
+        report.recommendations = ["<img src=x onerror=alert(1)>"]
+        html = ReconciliationReporter().to_html(report)
+        assert "<script>alert(1)</script>" not in html
+        assert "&lt;script&gt;" in html
+        assert "<img src=x" not in html
+
+    def test_batch_cli_honors_source_tables_config(self, tmp_path):
+        """Regression: --batch must honor --source-tables-config + --self-correct."""
+        import subprocess
+        import sys
+        cfg = tmp_path / "sources.json"
+        cfg.write_text(json.dumps({"1": "main.mapped.transactions"}))
+        out_dir = tmp_path / "out"
+        src_dir = tmp_path / "flows"
+        src_dir.mkdir()
+        (src_dir / "flow.yxmd").write_bytes(
+            (SAMPLES_DIR / "02_join_summarize.yxmd").read_bytes())
+        subprocess.run(
+            [sys.executable, "convert.py", str(src_dir), "--batch", "--self-correct",
+             "--format", "py", "--output-dir", str(out_dir),
+             "--source-tables-config", str(cfg)],
+            check=True, cwd=Path(__file__).parent.parent, capture_output=True)
+        generated = (out_dir / "flow.py").read_text()
+        assert "main.mapped.transactions" in generated

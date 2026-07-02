@@ -45,7 +45,7 @@ def source_to_cells(code: str) -> list:
     body = code.replace("# Databricks notebook source", "", 1)
     cells = []
     for raw_cell in body.split(DATABRICKS_CELL_SEPARATOR):
-        lines = [l for l in raw_cell.splitlines()]
+        lines = raw_cell.splitlines()
         # Trim leading/trailing blank lines
         while lines and not lines[0].strip():
             lines.pop(0)
@@ -53,10 +53,10 @@ def source_to_cells(code: str) -> list:
             lines.pop()
         if not lines:
             continue
-        if all(l.strip().startswith("# MAGIC") or not l.strip() for l in lines):
+        if all(line.strip().startswith("# MAGIC") or not line.strip() for line in lines):
             md_lines = []
-            for l in lines:
-                text = l.strip()
+            for line in lines:
+                text = line.strip()
                 text = re.sub(r"^# MAGIC ?", "", text)
                 if text == "%md":
                     continue
@@ -65,6 +65,23 @@ def source_to_cells(code: str) -> list:
         else:
             cells.append(("code", "\n".join(lines)))
     return cells
+
+
+def embed_report_cell(code: str, report_markdown: str) -> str:
+    """
+    Insert the validation report as the FIRST ``%md`` cell of a Databricks
+    source-format notebook (shared by the .py and .dbc export paths).
+    """
+    report_cell = "\n".join(
+        ["# COMMAND ----------", "", "# MAGIC %md"]
+        + [f"# MAGIC {line}" for line in report_markdown.splitlines()]
+        + ["", "# COMMAND ----------", ""]
+    )
+    if "# Databricks notebook source\n" in code:
+        return code.replace(
+            "# Databricks notebook source\n",
+            f"# Databricks notebook source\n\n{report_cell}\n", 1)
+    return f"# Databricks notebook source\n\n{report_cell}\n{code}"
 
 
 def to_ipynb(code: str, report_markdown: Optional[str] = None) -> dict:
@@ -177,18 +194,10 @@ class DatabricksExporter:
                 path.write_text(json.dumps(to_ipynb(result.code, report_md), indent=1),
                                 encoding="utf-8")
             elif fmt == "py":
-                report_cell = "\n".join(
-                    ["# COMMAND ----------", "", "# MAGIC %md"]
-                    + [f"# MAGIC {line}" for line in report_md.splitlines()]
-                    + ["", "# COMMAND ----------", ""]
-                )
-                code = result.code.replace(
-                    "# Databricks notebook source\n",
-                    f"# Databricks notebook source\n\n{report_cell}\n", 1)
-                path.write_text(code, encoding="utf-8")
+                path.write_text(embed_report_cell(result.code, report_md),
+                                encoding="utf-8")
             elif fmt == "dbc":
-                code_with_report = result.code + ""
-                path.write_bytes(to_dbc_bytes(code_with_report, name))
+                path.write_bytes(to_dbc_bytes(embed_report_cell(result.code, report_md), name))
             written[fmt] = str(path)
             logger.info("Exported %s -> %s", fmt, path)
         return written

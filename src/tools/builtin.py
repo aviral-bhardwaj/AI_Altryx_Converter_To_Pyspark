@@ -31,6 +31,25 @@ def _identifier(value: str) -> str:
     cleaned = re.sub(r"[^a-z0-9_]+", "_", value.lower()).strip("_")
     return cleaned or "unknown"
 
+
+FILE_EXTENSIONS = {"csv", "xlsx", "xls", "parquet", "yxdb", "txt", "json", "avro", "orc"}
+
+
+def _table_leaf_name(table_name: str) -> str:
+    """
+    Extract the logical table/stem name from an output target:
+    ``catalog.schema.table`` → ``table``; ``path/output.csv`` → ``output``.
+    """
+    leaf = table_name.replace("\\", "/").rsplit("/", 1)[-1]
+    if "." in leaf:
+        stem, ext = leaf.rsplit(".", 1)
+        if ext.lower() in FILE_EXTENSIONS:
+            # File target: use the stem's last dotted segment (drop the extension).
+            return stem.rsplit(".", 1)[-1]
+        # Catalog reference: the last dotted segment IS the table name.
+        return ext
+    return leaf
+
 # Alteryx field type -> Spark SQL type used for casts.
 SPARK_TYPE_MAP = {
     "Int16": "short", "Int32": "int", "Int64": "long",
@@ -138,15 +157,25 @@ class OutputDataConverter(ToolConverter):
         var = f"df_{tool.tool_id}"
         ctx.set_output_var(tool.tool_id, var)
 
+        lower_table = table_name.lower()
+        is_file_target = ("/" in table_name or "\\" in table_name
+                          or lower_table.rsplit(".", 1)[-1] in FILE_EXTENSIONS)
+
+        # Qualify bare table names with the configured Unity Catalog target
+        # (catalog.schema.table) so generated writes are workspace-portable.
+        if (not is_file_target and table_name.count(".") < 2
+                and ctx.target_catalog and ctx.target_schema):
+            table_name = (f"{ctx.target_catalog}.{ctx.target_schema}."
+                          f"{_identifier(table_name)}")
+
         lines = [f"# Tool {tool.tool_id}: OutputData -> {table_name}"]
         lines.append(f"{var} = {input_var}")
 
-        lower_table = table_name.lower()
         if lower_table.endswith(".csv"):
             lines.append(f'# {var}.write.csv({pystr(table_name)}, header=True, mode="overwrite")')
         else:
             lines.append(f'# {var}.write.format("delta").mode("overwrite").saveAsTable({pystr(table_name)})')
-        view_name = _identifier(table_name.replace("\\", "/").rsplit("/", 1)[-1].rsplit(".", 1)[-1])
+        view_name = _identifier(_table_leaf_name(table_name))
         lines.append(f'{var}.createOrReplaceTempView("{view_name}")')
         return lines
 
@@ -396,6 +425,7 @@ class SummarizeConverter(ToolConverter):
             "CountNonNull": "F.count",
         }
 
+        order_sensitive = False
         for sf in fields:
             field = sf.get("field", "")
             action = sf.get("action", "")
@@ -409,10 +439,19 @@ class SummarizeConverter(ToolConverter):
             elif action in action_map and action_map[action]:
                 func = action_map[action]
                 agg_exprs.append(f'{func}("{field}").alias("{alias}")')
+                if action in ("First", "Last"):
+                    order_sensitive = True
             else:
                 agg_exprs.append(f'F.first("{field}").alias("{alias}")')
+                order_sensitive = True
 
         lines = [f"# Tool {tool.tool_id}: Summarize"]
+        if order_sensitive:
+            # Unlike Alteryx's in-order desktop engine, Spark gives no row-order
+            # guarantee after a shuffle, so First/Last can vary between runs.
+            lines.append("# TODO: First/Last aggregations are order-dependent — Spark does not")
+            lines.append("#       guarantee row order after a shuffle. Add an explicit ordering")
+            lines.append("#       (e.g. Window + row_number over a sort key) for deterministic results.")
         if group_cols:
             group_str = ", ".join(group_cols)
             agg_str = ",\n    ".join(agg_exprs)
@@ -593,6 +632,9 @@ class MultiRowFormulaConverter(ToolConverter):
         ctx.set_output_var(tool.tool_id, var)
 
         lines = [f"# Tool {tool.tool_id}: MultiRowFormula"]
+        lines.append("# TODO: monotonically_increasing_id() only approximates the original row")
+        lines.append("#       order and is unreliable after shuffles — replace with a real sort")
+        lines.append("#       key (e.g. an upstream RecordID column) for order-dependent logic.")
         lines.append(f"_w_{tool.tool_id} = Window.orderBy(F.monotonically_increasing_id())")
         lines.append(f"{var} = {input_var}")
 

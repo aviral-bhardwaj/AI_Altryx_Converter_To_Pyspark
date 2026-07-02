@@ -55,7 +55,9 @@ listing:
   documentation_url: "https://github.com/aviral-bhardwaj/Altryx-Accelerator#readme"
   support_contact: "ardb40@gmail.com"
   terms_of_service: "MIT License — see LICENSE in the repository."
-  privacy_policy_url: ""                  # required by the provider profile
+  # TODO(before submission): replace with your real public privacy-policy URL —
+  # the Provider Console requires it and the listing cannot be submitted without it.
+  privacy_policy_url: "https://<your-domain>/privacy-policy"
 
   access:
     type: instantly_available             # free, no provider approval gate

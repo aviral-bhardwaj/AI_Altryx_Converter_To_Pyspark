@@ -126,9 +126,21 @@ def main():
 
     # ── Batch mode: convert a whole folder through the full pipeline ─
     if args.batch:
+        from src.converter_engine import ConverterEngine
         from src.databricks_exporter import batch_export
+        from src.self_correction import SelfCorrectingConverter
 
-        summaries = batch_export(str(workflow_path), args.output_dir, formats=formats)
+        batch_source_tables = None
+        if args.source_tables_config:
+            with open(args.source_tables_config) as f:
+                batch_source_tables = json.load(f)
+
+        batch_converter = SelfCorrectingConverter(
+            engine=ConverterEngine(source_tables_config=batch_source_tables),
+            max_iterations=3 if args.self_correct else 1,
+        )
+        summaries = batch_export(str(workflow_path), args.output_dir,
+                                 formats=formats, converter=batch_converter)
         print_summary([
             {
                 "container": s["workflow"],

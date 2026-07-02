@@ -97,15 +97,23 @@ class GeneratorContext:
         tools: list,
         connections: list,
         source_tables_config: Optional[dict] = None,
+        target_catalog: str = "",
+        target_schema: str = "",
     ):
         self.workflow = workflow
         self.tools = {t.tool_id: t for t in tools}
         self.connections = connections
         self.source_tables_config = source_tables_config or {}
+        self.target_catalog = target_catalog
+        self.target_schema = target_schema
 
         # df_vars: tool_id -> { port_name: variable_name }
         # Default port is "Output"
         self.df_vars: dict = {}
+
+        # Variable names already handed out — collisions get a _<tool_id>
+        # suffix so two tools sharing an annotation never overwrite each other.
+        self._used_var_names: set = set()
 
         # Build connection lookups
         self._incoming: dict = defaultdict(list)
@@ -144,6 +152,7 @@ class GeneratorContext:
         if tool_id not in self.df_vars:
             self.df_vars[tool_id] = {}
         self.df_vars[tool_id][port] = var_name
+        self._used_var_names.add(var_name)
 
     def get_output_var(self, tool_id: int, port: str = "Output") -> str:
         """Get the output variable name for a tool."""
@@ -166,7 +175,16 @@ class GeneratorContext:
         return self._incoming[tool_id]
 
     def make_var_name(self, tool: Tool) -> str:
-        """Generate a meaningful variable name for a tool's output."""
+        """Generate a meaningful, collision-free variable name for a tool's output."""
+        candidate = self._candidate_var_name(tool)
+        # Two tools can share an annotation or a table leaf name; dedupe so
+        # the second one never silently overwrites the first's DataFrame.
+        if candidate in self._used_var_names:
+            candidate = f"{candidate}_{tool.tool_id}"
+        self._used_var_names.add(candidate)
+        return candidate
+
+    def _candidate_var_name(self, tool: Tool) -> str:
         ann = (tool.annotation or "").strip()
         if ann and len(ann) > 2:
             cleaned = ann.lower()

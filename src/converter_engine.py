@@ -25,13 +25,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-try:
-    from lxml import etree as _XML  # noqa: N812
-except ImportError:  # pragma: no cover - lxml is in requirements.txt
-    import xml.etree.ElementTree as _XML
-
 from .models import Workflow, Tool
-from .parser import _extract_structured_config
+from .parser import ET as _XML, SAFE_XML_PARSER, _extract_structured_config
 from .tools import GeneratorContext, build_converter_map, get_converter, topological_sort
 
 logger = logging.getLogger(__name__)
@@ -150,6 +145,8 @@ class ConverterEngine:
             tools=tools,
             connections=connections,
             source_tables_config=self.source_tables_config,
+            target_catalog=self.target_catalog,
+            target_schema=self.target_schema,
         )
 
         ordered_ids = topological_sort(tools, connections)
@@ -253,7 +250,8 @@ class ConverterEngine:
             if tool.parsed_config or not tool.configuration_xml:
                 continue
             try:
-                config_el = _XML.fromstring(tool.configuration_xml.encode("utf-8"))
+                config_el = _XML.fromstring(tool.configuration_xml.encode("utf-8"),
+                                            SAFE_XML_PARSER)
                 reparsed = _extract_structured_config(config_el, tool.tool_type)
                 if reparsed:
                     tool.parsed_config = reparsed
