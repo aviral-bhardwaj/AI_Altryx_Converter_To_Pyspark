@@ -1,10 +1,17 @@
-# Core dependency (optional - falls back to urllib if not installed)
+# Core converter dependencies
+lxml>=4.9              # .yxmd XML parsing
+pyyaml>=6.0            # config/tool_mapping.yaml driven engine
+nbformat>=5.9          # .ipynb notebook generation
+
+# Optional AI-assisted conversion mode (falls back to urllib if not installed)
 anthropic>=0.39.0
 
-# Phase 1 & Phase 2 converter dependencies
-pyyaml>=6.0
+# Templating used by the AI context builder
 jinja2>=3.0
 
-# Development dependencies
+# Development / CI dependencies
 pytest>=7.0
 pytest-cov>=4.0
+
+# Local end-to-end validation (Databricks Runtime already ships pyspark)
+# pyspark>=3.4  # uncomment for local sample-data validation

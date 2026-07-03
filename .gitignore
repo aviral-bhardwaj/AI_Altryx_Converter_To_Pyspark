@@ -10,3 +10,6 @@ output/
 *.env
 .env.*
 *.key
+ci_output/
+demo_output/
+.databricks/

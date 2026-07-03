@@ -13,6 +13,8 @@ elements and those at the root level — as one combined pipeline.
 
 Usage:
     python convert.py <workflow.yxmd> [--mode deterministic] [--output-dir ./output]
+    python convert.py <workflow.yxmd> --self-correct --format ipynb,py
+    python convert.py <folder> --batch --self-correct     # convert every .yxmd
     python convert.py <workflow.yxmd> --mode ai  # requires ANTHROPIC_API_KEY
     python convert.py <workflow.yxmd> --validate --validate-target-columns col1,col2
 
@@ -79,6 +81,22 @@ def main():
              "Databricks catalog.schema.table paths.",
     )
     parser.add_argument(
+        "--self-correct",
+        action="store_true",
+        help="Run the self-correcting validation loop (up to 3 generate/validate/"
+             "correct iterations) and embed the validation report in the notebook.",
+    )
+    parser.add_argument(
+        "--format", "-f",
+        default="py",
+        help="Comma-separated output formats: py, ipynb, dbc (default: py).",
+    )
+    parser.add_argument(
+        "--batch",
+        action="store_true",
+        help="Treat the workflow argument as a folder and convert every .yxmd in it.",
+    )
+    parser.add_argument(
         "--validate",
         action="store_true",
         help="Run validation after generation. Requires --validate-target-columns.",
@@ -103,6 +121,39 @@ def main():
     if not workflow_path.exists():
         print(f"  Workflow file not found: {workflow_path}")
         sys.exit(1)
+
+    formats = tuple(f.strip() for f in args.format.split(",") if f.strip())
+
+    # ── Batch mode: convert a whole folder through the full pipeline ─
+    if args.batch:
+        from src.converter_engine import ConverterEngine
+        from src.databricks_exporter import batch_export
+        from src.self_correction import SelfCorrectingConverter
+
+        batch_source_tables = None
+        if args.source_tables_config:
+            with open(args.source_tables_config) as f:
+                batch_source_tables = json.load(f)
+
+        batch_converter = SelfCorrectingConverter(
+            engine=ConverterEngine(source_tables_config=batch_source_tables),
+            max_iterations=3 if args.self_correct else 1,
+        )
+        summaries = batch_export(str(workflow_path), args.output_dir,
+                                 formats=formats, converter=batch_converter)
+        print_summary([
+            {
+                "container": s["workflow"],
+                "file": next(iter(s["files"].values()), "-"),
+                "status": (f"Success ({s['status']})"
+                           if s["status"] in ("PASS", "WARNING") else s["status"]),
+                "time": f"{s['iterations']} iter",
+                "tools": "-",
+            }
+            for s in summaries
+        ])
+        failed = [s for s in summaries if str(s["status"]).startswith(("FAIL", "ERROR"))]
+        sys.exit(1 if failed else 0)
 
     if args.mode == "ai":
         api_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -195,23 +246,26 @@ def main():
                 max_retries=args.max_retries,
                 source_tables=source_tables,
             )
+            gen_time = time.time() - t0
+            output_file = output_dir / f"{safe_name}.py"
+            output_file.write_text(code, encoding="utf-8")
+            status_label = "Success"
         else:
-            code = _generate_deterministic(
+            output_file, status_label = _generate_deterministic(
                 workflow=workflow,
                 unified_ctx=unified_ctx,
                 workflow_name=workflow_name,
                 source_tables=source_tables,
+                output_dir=output_dir,
+                formats=formats,
+                self_correct=args.self_correct,
             )
-
-        gen_time = time.time() - t0
-
-        output_file = output_dir / f"{safe_name}.py"
-        output_file.write_text(code, encoding="utf-8")
+            gen_time = time.time() - t0
 
         results.append({
             "container": f"{workflow_name} (unified)",
             "file": str(output_file),
-            "status": "Success",
+            "status": status_label,
             "time": f"{gen_time:.1f}s",
             "tools": len(unified_ctx["tools"]),
         })
@@ -253,16 +307,34 @@ def _generate_ai(workflow, unified_ctx, api_key, model, max_retries, source_tabl
     )
 
 
-def _generate_deterministic(workflow, unified_ctx, workflow_name, source_tables):
-    """Generate PySpark code using deterministic rule-based converters."""
-    from src.pyspark_generator import PySparkCodeGenerator
+def _generate_deterministic(workflow, unified_ctx, workflow_name, source_tables,
+                            output_dir, formats, self_correct):
+    """
+    Generate PySpark via the deterministic engine, run the self-correcting
+    validation loop, and export in the requested formats. Returns
+    (primary_output_path, status_label).
+    """
+    from src.converter_engine import ConverterEngine
+    from src.databricks_exporter import DatabricksExporter
+    from src.self_correction import SelfCorrectingConverter
 
-    generator = PySparkCodeGenerator(source_tables_config=source_tables)
-    return generator.generate(
-        workflow=workflow,
-        workflow_name=workflow_name,
-        context=unified_ctx,
+    engine = ConverterEngine(source_tables_config=source_tables)
+    converter = SelfCorrectingConverter(
+        engine=engine,
+        max_iterations=3 if self_correct else 1,
     )
+    result = converter.convert(workflow, workflow_name, context=unified_ctx)
+
+    exporter = DatabricksExporter(str(output_dir))
+    written = exporter.export(result, formats=formats)
+
+    print(f"   Validation: {result.status} after {len(result.iterations)} iteration(s)")
+    for fmt, path in written.items():
+        print(f"   [{fmt}] {path}")
+
+    primary = written.get("py") or next(iter(written.values()))
+    label = "Success" if result.status in ("PASS", "WARNING") else "Best-effort (FAIL)"
+    return primary, label
 
 
 def _run_validation(args, workflow, unified_ctx, output_dir, safe_name):

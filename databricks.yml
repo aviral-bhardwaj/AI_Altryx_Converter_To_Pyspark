@@ -1,0 +1,81 @@
+# ═══════════════════════════════════════════════════════════════════
+# Databricks Asset Bundle — Alteryx → Databricks Converter
+# ═══════════════════════════════════════════════════════════════════
+# Deploy to any workspace:
+#   databricks bundle validate
+#   databricks bundle deploy -t dev|staging|prod
+#   databricks bundle run alteryx_migration_job -t dev
+#
+# Workspace hosts are intentionally NOT hardcoded: set DATABRICKS_HOST
+# (and auth via `databricks auth login` / DATABRICKS_TOKEN), or override
+# per target with --var / BUNDLE_VAR_* environment variables.
+# Docs: https://docs.databricks.com/dev-tools/bundles/settings.html
+
+bundle:
+  name: alteryx-to-databricks-converter
+
+include:
+  - resources/*.yml
+
+# Files synced into the workspace on `bundle deploy`. Shared Python modules in
+# src/ are importable from the notebook via sys.path (see the Skill Mode
+# notebook's setup cell).
+sync:
+  paths:
+    - src
+    - notebooks
+    - config
+    - requirements.txt
+    - tests/sample_workflows
+
+variables:
+  target_catalog:
+    description: Unity Catalog catalog for converted output tables
+    default: main
+  target_schema:
+    description: Unity Catalog schema for converted output tables
+    default: alteryx_migrated
+  input_dir:
+    description: Workspace/Volume folder containing .yxmd files for batch conversion
+    default: ${workspace.file_path}/tests/sample_workflows
+  output_dir:
+    description: Folder where converted notebooks are written
+    default: ${workspace.file_path}/output
+  notification_email:
+    description: Email notified on migration job failure
+    default: ""
+  node_type_id:
+    description: Cluster node type for the migration job (ignored on serverless)
+    default: i3.xlarge
+  spark_version:
+    description: Databricks Runtime for the migration job (13.3 LTS minimum)
+    default: 15.4.x-scala2.12
+
+targets:
+  # ── Development: personal, disposable deployments ────────────────
+  dev:
+    mode: development
+    default: true
+    workspace:
+      # Host resolved from DATABRICKS_HOST / active CLI profile.
+      root_path: ~/.bundle/${bundle.name}/${bundle.target}
+
+  # ── Staging: shared pre-production validation ─────────────────────
+  staging:
+    mode: production
+    workspace:
+      root_path: /Workspace/Shared/.bundle/${bundle.name}/${bundle.target}
+    presets:
+      name_prefix: "[staging] "
+
+  # ── Production: locked-down, service-principal owned ─────────────
+  prod:
+    mode: production
+    workspace:
+      root_path: /Workspace/Shared/.bundle/${bundle.name}/${bundle.target}
+    permissions:
+      - level: CAN_VIEW
+        group_name: users
+    # Recommended: pin a service principal owner for production runs, e.g.
+    # run_as:
+    #   service_principal_name: <sp-application-id>

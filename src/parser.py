@@ -5,10 +5,22 @@ Parses Alteryx workflow XML into structured models (Containers, Tools, Connectio
 Handles nested containers, all tool types, and connection tracking.
 """
 
-import xml.etree.ElementTree as ET
 import re
 import logging
 from typing import Optional
+
+try:  # Prefer lxml (faster, better error recovery); stdlib fallback keeps
+    # the parser dependency-free for local/offline use.
+    from lxml import etree as ET
+    _USING_LXML = True
+    # .yxmd files are user-supplied XML: disable entity resolution and network
+    # access to rule out XXE. (The stdlib parser ignores external entities by
+    # default, so it needs no equivalent flag.)
+    SAFE_XML_PARSER = ET.XMLParser(resolve_entities=False, no_network=True)
+except ImportError:  # pragma: no cover
+    import xml.etree.ElementTree as ET
+    _USING_LXML = False
+    SAFE_XML_PARSER = None
 
 from .models import Workflow, Container, Tool, Connection
 
@@ -261,7 +273,7 @@ class AlteryxWorkflowParser:
 
     def parse(self) -> Workflow:
         """Parse the workflow file and return a Workflow model."""
-        self.tree = ET.parse(self.filepath)
+        self.tree = ET.parse(self.filepath, SAFE_XML_PARSER)
         self.root = self.tree.getroot()
 
         all_tools = {}
